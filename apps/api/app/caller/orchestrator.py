@@ -79,6 +79,14 @@ class CallOrchestrator:
         vendor = self.inputs.get_vendor_target(request.vendor_id)
         if vendor is None:
             raise NotFoundError(f"Vendor {request.vendor_id!r} was not found")
+        if any(
+            bid.job_spec_version_id != spec.version_id
+            for bid in request.policy.verified_competing_bids
+        ):
+            raise ValidationError(
+                "Competing-bid leverage must reference the same confirmed job "
+                "specification version"
+            )
 
         call = CallRecord(
             call_id=f"call_{uuid4().hex}",

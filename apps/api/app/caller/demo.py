@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+import base64
 import re
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from fastapi import APIRouter
+from fastapi import APIRouter, File, UploadFile
 from pydantic import BaseModel, Field
 
+from .audio import AudioPipelineAdapter
+from .errors import ExternalServiceError
 from .orchestrator import CallOrchestrator
 from .openai_agent import BuyerTurnDecision, BuyerTurnModel
 from .schemas import (
     AgentEvent,
     AgentEventType,
     CallCreateRequest,
+    CallPolicy,
     CallStatus,
     CallView,
     ConfirmedJobSpec,
@@ -22,6 +26,7 @@ from .schemas import (
     QuoteTermInput,
     TranscriptEventInput,
     VendorTarget,
+    VerifiedCompetingBid,
 )
 
 
@@ -49,11 +54,76 @@ class DemoMessageRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
 
 
+class DemoStartRequest(BaseModel):
+    verified_competing_bid: VerifiedCompetingBid | None = None
+
+
 class DemoTurnResponse(BaseModel):
     agent_message: str
     call: CallView
     terminal: bool
     model: str
+
+
+class DemoVoiceTurnResponse(DemoTurnResponse):
+    transcription: str | None = None
+    audio_base64: str
+    audio_content_type: str
+    audio_provider: str = "elevenlabs"
+
+
+class VoiceTurnPipeline:
+    """Composes STT -> Caller/GPT -> TTS without leaking audio into the domain."""
+
+    def __init__(
+        self,
+        simulator: "TextVoiceSimulator",
+        audio_adapter: AudioPipelineAdapter,
+    ) -> None:
+        self.simulator = simulator
+        self.audio_adapter = audio_adapter
+
+    async def start(
+        self, request: DemoStartRequest | None = None
+    ) -> DemoVoiceTurnResponse:
+        turn = await self.simulator.start(request)
+        return await self._with_audio(turn)
+
+    async def receive_audio(
+        self,
+        call_id: str,
+        audio: bytes,
+        *,
+        filename: str,
+        media_type: str,
+    ) -> DemoVoiceTurnResponse:
+        transcription = await self.audio_adapter.transcribe(
+            audio,
+            filename=filename,
+            media_type=media_type,
+        )
+        turn = await self.simulator.receive(call_id, transcription)
+        return await self._with_audio(turn, transcription=transcription)
+
+    async def receive_text(
+        self, call_id: str, text: str
+    ) -> DemoVoiceTurnResponse:
+        turn = await self.simulator.receive(call_id, text)
+        return await self._with_audio(turn, transcription=text)
+
+    async def _with_audio(
+        self,
+        turn: DemoTurnResponse,
+        *,
+        transcription: str | None = None,
+    ) -> DemoVoiceTurnResponse:
+        speech = await self.audio_adapter.synthesize(turn.agent_message)
+        return DemoVoiceTurnResponse(
+            **turn.model_dump(),
+            transcription=transcription,
+            audio_base64=base64.b64encode(speech.content).decode("ascii"),
+            audio_content_type=speech.media_type,
+        )
 
 
 class TextVoiceSimulator:
@@ -67,12 +137,20 @@ class TextVoiceSimulator:
         self.orchestrator = orchestrator
         self.turn_model = turn_model
 
-    async def start(self) -> DemoTurnResponse:
+    async def start(
+        self, request: DemoStartRequest | None = None
+    ) -> DemoTurnResponse:
+        bid = request.verified_competing_bid if request else None
+        policy = CallPolicy(
+            verified_competing_bids=(bid,) if bid else (),
+            approved_leverage_bid_id=bid.bid_id if bid else None,
+        )
         call = self.orchestrator.create_call(
             CallCreateRequest(
                 job_spec_version_id=DEMO_SPEC.version_id,
                 vendor_id=DEMO_VENDOR.vendor_id,
                 call_type="text_voice_demo",
+                policy=policy,
             )
         )
         await self.orchestrator.start_call(call.call_id)
@@ -255,6 +333,9 @@ class TextVoiceSimulator:
             quote = self.orchestrator.get_call_view(call_id).original_quote
             categories = {term.category for term in quote.terms}
             if {"fee", "binding_status", "availability"}.issubset(categories):
+                leverage = self._pending_approved_leverage(call_id)
+                if leverage is not None:
+                    return self._say(call_id, self._leverage_message(leverage))
                 self.orchestrator.handle_agent_event(
                     call_id,
                     AgentEvent(
@@ -392,6 +473,10 @@ class TextVoiceSimulator:
                 "Are you available for the requested date, August 1, 2026?",
             )
 
+        leverage = self._pending_approved_leverage(call_id)
+        if leverage is not None:
+            return self._say(call_id, self._leverage_message(leverage))
+
         self.orchestrator.handle_agent_event(
             call_id,
             AgentEvent(
@@ -400,6 +485,54 @@ class TextVoiceSimulator:
             ),
         )
         return self._say(call_id, self._summary(call_id))
+
+    def _pending_approved_leverage(
+        self, call_id: str
+    ) -> VerifiedCompetingBid | None:
+        view = self.orchestrator.get_call_view(call_id)
+        approved_id = view.call.policy.approved_leverage_bid_id
+        if approved_id is None:
+            return None
+        bid = next(
+            (
+                candidate
+                for candidate in view.call.policy.verified_competing_bids
+                if candidate.bid_id == approved_id
+            ),
+            None,
+        )
+        if bid is None:
+            return None
+        current_total = self._latest_term_value(
+            view.original_quote, "estimated_total"
+        )
+        if not isinstance(current_total, (int, float)) or current_total <= bid.total:
+            return None
+        marker = self._leverage_marker(bid)
+        if any(
+            event.speaker == "agent" and marker in event.text
+            for event in view.transcript
+        ):
+            return None
+        return bid
+
+    @staticmethod
+    def _leverage_marker(bid: VerifiedCompetingBid) -> str:
+        amount = (
+            f"${bid.total:,.2f}"
+            if bid.currency.upper() == "USD"
+            else f"{bid.currency.upper()} {bid.total:,.2f}"
+        )
+        return f"verified competing quote for {amount}"
+
+    def _leverage_message(self, bid: VerifiedCompetingBid) -> str:
+        binding = (
+            "binding " if bid.binding_status == "binding" else ""
+        )
+        return (
+            f"I have a {binding}{self._leverage_marker(bid)} for the same confirmed "
+            "job. Can you match or beat that total, or improve the terms?"
+        )
 
     def _capture_quote_facts(
         self, call_id: str, text: str, evidence: EvidenceInput
@@ -588,17 +721,63 @@ class TextVoiceSimulator:
         return bool(re.search(r"\b(yes|correct|accurate|confirmed|that's right|that is right)\b", text))
 
 
-def build_demo_router(simulator: TextVoiceSimulator) -> APIRouter:
+def build_demo_router(
+    simulator: TextVoiceSimulator,
+    audio_adapter: AudioPipelineAdapter | None = None,
+) -> APIRouter:
     router = APIRouter(prefix="/api/v1/demo", tags=["caller-demo"])
 
     @router.post("/sessions", response_model=DemoTurnResponse)
-    async def start_session() -> DemoTurnResponse:
-        return await simulator.start()
+    async def start_session(
+        request: DemoStartRequest | None = None,
+    ) -> DemoTurnResponse:
+        return await simulator.start(request)
 
     @router.post("/sessions/{call_id}/messages", response_model=DemoTurnResponse)
     async def send_message(
         call_id: str, request: DemoMessageRequest
     ) -> DemoTurnResponse:
         return await simulator.receive(call_id, request.text)
+
+    def voice_pipeline() -> VoiceTurnPipeline:
+        if audio_adapter is None:
+            raise ExternalServiceError(
+                "ElevenLabs voice is not configured. Set ELEVENLABS_API_KEY and "
+                "ELEVENLABS_VOICE_ID, then restart the API."
+            )
+        return VoiceTurnPipeline(simulator, audio_adapter)
+
+    @router.post("/voice/sessions", response_model=DemoVoiceTurnResponse)
+    async def start_voice_session(
+        request: DemoStartRequest | None = None,
+    ) -> DemoVoiceTurnResponse:
+        return await voice_pipeline().start(request)
+
+    @router.post(
+        "/voice/sessions/{call_id}/messages",
+        response_model=DemoVoiceTurnResponse,
+    )
+    async def send_voice_message(
+        call_id: str,
+        audio: UploadFile = File(...),
+    ) -> DemoVoiceTurnResponse:
+        content = await audio.read()
+        if len(content) > 25 * 1024 * 1024:
+            raise ExternalServiceError("The recording exceeds the 25 MB demo limit.")
+        return await voice_pipeline().receive_audio(
+            call_id,
+            content,
+            filename=audio.filename or "vendor-recording.webm",
+            media_type=audio.content_type or "application/octet-stream",
+        )
+
+    @router.post(
+        "/voice/sessions/{call_id}/text",
+        response_model=DemoVoiceTurnResponse,
+    )
+    async def send_voice_text(
+        call_id: str, request: DemoMessageRequest
+    ) -> DemoVoiceTurnResponse:
+        return await voice_pipeline().receive_text(call_id, request.text)
 
     return router

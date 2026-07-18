@@ -20,8 +20,17 @@ vendor transcript evidence and finalizes exactly one structured conversation out
   terms, evidence links, and outcomes.
 - Provider tools log each quote fact during the conversation. Vendor transcript
   evidence is mandatory and cross-call evidence is rejected.
+- Both sides of every conversation are durably stored in sequence and supplied to
+  GPT as bounded conversation history, alongside the cumulative structured quote.
+- Competing-bid leverage must be supplied as a verified, evidence-referenced policy
+  input for the same immutable job. The Caller cannot select or invent leverage.
 - A deterministic simulated voice adapter supports end-to-end development before
   ElevenLabs, Twilio, or SIP is connected.
+- The local demo supports microphone audio -> ElevenLabs Scribe v2 -> GPT-5.4 ->
+  ElevenLabs Flash v2.5 -> browser audio playback.
+
+The challenge-level product constraints are recorded in
+[`docs/PRODUCT_CONTEXT.md`](docs/PRODUCT_CONTEXT.md).
 
 The module does **not** edit job specifications, generate prices, decide concessions,
 rank vendors, produce reports, or accept contracts.
@@ -59,7 +68,24 @@ Run tests:
 python -m pytest -q
 ```
 
-## Try the text-in, voice-out console
+## Try the voice pipeline
+
+Configure both providers in the same PowerShell window that will run the API:
+
+```powershell
+$env:OPENAI_API_KEY = "your-openai-key"
+$env:ELEVENLABS_API_KEY = "your-elevenlabs-key"
+$env:ELEVENLABS_VOICE_ID = "your-elevenlabs-voice-id"
+```
+
+The keys stay server-side and are never sent to the browser. Optional model overrides
+default to `gpt-5.4`, `scribe_v2`, and `eleven_flash_v2_5`:
+
+```powershell
+$env:OPENAI_MODEL = "gpt-5.4"
+$env:ELEVENLABS_STT_MODEL = "scribe_v2"
+$env:ELEVENLABS_TTS_MODEL = "eleven_flash_v2_5"
+```
 
 Start the local API:
 
@@ -68,9 +94,13 @@ uvicorn apps.api.app.main:app --reload
 ```
 
 Then open `http://127.0.0.1:8000/demo/` in a modern browser and select **Start
-test call**. Type the vendor's replies; the buyer response is spoken with the
-browser's built-in speech synthesis. No phone, microphone, API key, or voice-provider
-account is required.
+test call**. Allow microphone access, select **Record vendor reply**, speak, and stop
+the recording. The backend sends the recording to ElevenLabs for transcription,
+runs the resulting text through the Caller and GPT, then sends the buyer response to
+ElevenLabs for speech generation. The browser receives only the generated audio.
+
+Typing remains available for quick testing; typed turns still use GPT and ElevenLabs
+voice output, but skip speech-to-text.
 
 The page includes a four-message quick test script that produces a complete quote.
 You can also try phrases such as “I will call you back tomorrow” or “I decline to
@@ -78,7 +108,30 @@ quote” to exercise the other outcomes. When `OPENAI_API_KEY` is present, the d
 `gpt-5.4` through the Responses API for natural conversation and same-turn structured
 fact extraction. Without a key, it falls back to the deterministic simulator. Both
 paths write through the same transcript, evidence, quote, state-machine, and
-finalization code.
+finalization code. If ElevenLabs configuration is missing, the voice endpoint returns
+a clear configuration error rather than silently switching to browser speech.
+
+Enter an optional **Verified binding competing bid** before starting the demo to test
+an honest price-match turn. In production, the comparison/negotiation layer supplies
+the same data through `CallPolicy`:
+
+```json
+{
+  "verified_competing_bids": [{
+    "bid_id": "bid_1850",
+    "source_call_id": "call_previous_vendor",
+    "job_spec_version_id": "spec_123",
+    "total": 1850,
+    "currency": "USD",
+    "binding_status": "binding",
+    "evidence_reference": "transcript://call_previous_vendor/te_481"
+  }],
+  "approved_leverage_bid_id": "bid_1850"
+}
+```
+
+Only the externally approved bid can be stated. Its job-spec version must match the
+current call, and its source/evidence reference remains attached to the call policy.
 
 Override the model only when intentionally testing another compatible model:
 
@@ -126,10 +179,12 @@ agent event, and every quote write.
 
 ## Provider integration
 
-`SimulatedVoiceSessionAdapter` is the current runnable adapter. Implement the four
-methods in `adapters/elevenlabs.py` using the provider SDK and inject that adapter at
-startup. Provider callbacks should map to `AgentEvent`; provider tool calls should map
-to the classes in `caller/tools`.
+`ElevenLabsAudioAdapter` owns the demo's Scribe STT and Text-to-Speech HTTP calls.
+`SimulatedVoiceSessionAdapter` still owns the provider-neutral call-session seam used
+by the Caller orchestrator. Future realtime ElevenLabs Agents, Twilio, or SIP sessions
+can implement that seam while reusing the same state machine and quote tools. Provider
+callbacks should map to `AgentEvent`; provider tool calls should map to the classes in
+`caller/tools`.
 
 The event lifecycle is backend-controlled:
 

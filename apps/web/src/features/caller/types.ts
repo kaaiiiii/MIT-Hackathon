@@ -18,10 +18,32 @@ export type OutcomeType =
   | "declined"
   | "incomplete_quote";
 
+export interface VerifiedCompetingBid {
+  bid_id: string;
+  source_call_id: string;
+  job_spec_version_id: string;
+  total: number;
+  currency: string;
+  binding_status: "binding" | "non_binding" | "unclear";
+  evidence_reference: string;
+}
+
+export interface CallPolicyInput {
+  disclose_ai?: true;
+  max_duration_seconds?: number;
+  require_itemization?: boolean;
+  probe_hidden_fees?: boolean;
+  allow_callback?: boolean;
+  custom_questions?: string[];
+  verified_competing_bids?: VerifiedCompetingBid[];
+  approved_leverage_bid_id?: string | null;
+}
+
 export interface CreateCallInput {
   job_spec_version_id: string;
   vendor_id: string;
   call_type?: string;
+  policy?: CallPolicyInput;
 }
 
 export interface CallRecord {
@@ -73,4 +95,3 @@ export interface CallView {
   outcome: StructuredCallOutcome | null;
   recording_reference: string | null;
 }
-

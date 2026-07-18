@@ -13,15 +13,20 @@ const evidenceCount = document.querySelector("#evidence-count");
 const outcomeCard = document.querySelector("#outcome-card");
 const outcomeTitle = document.querySelector("#outcome-title");
 const outcomeDetail = document.querySelector("#outcome-detail");
-const voiceToggle = document.querySelector("#voice-toggle");
-const voiceSelect = document.querySelector("#voice-select");
 const replayButton = document.querySelector("#replay-button");
 const modelBadge = document.querySelector("#model-badge");
 const suggestions = document.querySelector("#suggestions");
+const recordButton = document.querySelector("#record-button");
+const recordLabel = document.querySelector("#record-label");
+const recordingStatus = document.querySelector("#recording-status");
+const competingBidTotal = document.querySelector("#competing-bid-total");
 
 let callId = null;
-let lastAgentMessage = "";
+let lastAudio = null;
 let isBusy = false;
+let mediaRecorder = null;
+let microphoneStream = null;
+let audioChunks = [];
 
 const stateOrder = [
   "disclosure",
@@ -59,46 +64,23 @@ const suggestedReplies = {
   summary_confirmation: ["Yes, that's correct.", "No, the total should be $500."],
 };
 
-function populateVoices() {
-  const voices = window.speechSynthesis?.getVoices() ?? [];
-  const previous = voiceSelect.value;
-  voiceSelect.replaceChildren();
-  const english = voices.filter((voice) => voice.lang.toLowerCase().startsWith("en"));
-  const choices = english.length ? english : voices;
-  choices.forEach((voice) => {
-    const option = document.createElement("option");
-    option.value = voice.name;
-    option.textContent = `${voice.name} · ${voice.lang}`;
-    voiceSelect.append(option);
-  });
-  if (choices.some((voice) => voice.name === previous)) voiceSelect.value = previous;
-}
-
-populateVoices();
-if (window.speechSynthesis) window.speechSynthesis.onvoiceschanged = populateVoices;
-
-function speak(text) {
-  lastAgentMessage = text;
+function playVoice(data) {
+  lastAudio = `data:${data.audio_content_type};base64,${data.audio_base64}`;
   replayButton.disabled = false;
-  if (!voiceToggle.checked || !window.speechSynthesis) return;
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  const selected = window.speechSynthesis.getVoices().find((voice) => voice.name === voiceSelect.value);
-  if (selected) utterance.voice = selected;
-  utterance.rate = 0.96;
-  utterance.pitch = 1;
-  window.speechSynthesis.speak(utterance);
+  new Audio(lastAudio).play().catch(() => {
+    recordingStatus.textContent = "Voice is ready. Select Replay buyer voice to hear it.";
+  });
 }
 
-replayButton.addEventListener("click", () => lastAgentMessage && speak(lastAgentMessage));
-voiceToggle.addEventListener("change", () => {
-  if (!voiceToggle.checked && window.speechSynthesis) window.speechSynthesis.cancel();
-});
+replayButton.addEventListener("click", () => lastAudio && new Audio(lastAudio).play());
 
 async function api(path, options = {}) {
+  const headers = options.body instanceof FormData
+    ? { ...options.headers }
+    : { "content-type": "application/json", ...options.headers };
   const response = await fetch(path, {
     ...options,
-    headers: { "content-type": "application/json", ...options.headers },
+    headers,
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.detail ?? `Request failed (${response.status})`);
@@ -109,12 +91,28 @@ startButton.addEventListener("click", async () => {
   if (isBusy) return;
   setBusy(true);
   try {
-    if (window.speechSynthesis) window.speechSynthesis.cancel();
-    const data = await api("/api/v1/demo/sessions", { method: "POST" });
+    const total = Number(competingBidTotal.value);
+    const payload = Number.isFinite(total) && total > 0
+      ? {
+          verified_competing_bid: {
+            bid_id: `demo_bid_${Date.now()}`,
+            source_call_id: "demo_verified_source_call",
+            job_spec_version_id: "demo_spec_piano",
+            total,
+            currency: "USD",
+            binding_status: "binding",
+            evidence_reference: "demo://user-confirmed-competing-bid",
+          },
+        }
+      : {};
+    const data = await api("/api/v1/demo/voice/sessions", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
     callId = data.call.call.call_id;
     startButton.querySelector("span").textContent = "Start new call";
     render(data);
-    speak(data.agent_message);
+    playVoice(data);
     input.focus();
   } catch (error) {
     showError(error.message);
@@ -130,12 +128,12 @@ form.addEventListener("submit", async (event) => {
   setBusy(true);
   input.value = "";
   try {
-    const data = await api(`/api/v1/demo/sessions/${callId}/messages`, {
+    const data = await api(`/api/v1/demo/voice/sessions/${callId}/text`, {
       method: "POST",
       body: JSON.stringify({ text }),
     });
     render(data);
-    speak(data.agent_message);
+    playVoice(data);
   } catch (error) {
     input.value = text;
     showError(error.message);
@@ -144,6 +142,64 @@ form.addEventListener("submit", async (event) => {
     if (!input.disabled) input.focus();
   }
 });
+
+recordButton.addEventListener("click", async () => {
+  if (!callId || isBusy) return;
+  if (mediaRecorder?.state === "recording") {
+    mediaRecorder.stop();
+    recordButton.classList.remove("recording");
+    recordLabel.textContent = "Record vendor reply";
+    recordingStatus.textContent = "Processing speech with ElevenLabs Scribe v2…";
+    return;
+  }
+
+  try {
+    microphoneStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const preferred = "audio/webm;codecs=opus";
+    const options = MediaRecorder.isTypeSupported(preferred) ? { mimeType: preferred } : {};
+    mediaRecorder = new MediaRecorder(microphoneStream, options);
+    audioChunks = [];
+    mediaRecorder.addEventListener("dataavailable", (event) => {
+      if (event.data.size) audioChunks.push(event.data);
+    });
+    mediaRecorder.addEventListener("stop", submitRecording, { once: true });
+    mediaRecorder.start();
+    recordButton.classList.add("recording");
+    recordLabel.textContent = "Stop and send";
+    recordingStatus.textContent = "Recording… speak as the vendor, then stop.";
+  } catch (error) {
+    showError(`Microphone unavailable: ${error.message}`);
+  }
+});
+
+async function submitRecording() {
+  const mimeType = mediaRecorder?.mimeType || "audio/webm";
+  const blob = new Blob(audioChunks, { type: mimeType });
+  microphoneStream?.getTracks().forEach((track) => track.stop());
+  microphoneStream = null;
+  mediaRecorder = null;
+  if (!blob.size) {
+    showError("The microphone recording was empty.");
+    return;
+  }
+
+  setBusy(true);
+  try {
+    const formData = new FormData();
+    formData.append("audio", blob, mimeType.includes("webm") ? "vendor.webm" : "vendor-audio");
+    const data = await api(`/api/v1/demo/voice/sessions/${callId}/messages`, {
+      method: "POST",
+      body: formData,
+    });
+    render(data);
+    playVoice(data);
+    recordingStatus.textContent = `ElevenLabs heard: “${data.transcription}”`;
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    setBusy(false);
+  }
+}
 
 input.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
@@ -175,7 +231,8 @@ function render(data) {
   renderSuggestions(status, terminal);
   input.disabled = terminal;
   sendButton.disabled = terminal;
-  input.placeholder = terminal ? "This call has ended." : "Type the vendor’s reply…";
+  recordButton.disabled = terminal;
+  input.placeholder = terminal ? "This call has ended." : "Or type the vendor’s reply…";
 }
 
 function renderStages(status) {
@@ -270,6 +327,7 @@ function setBusy(busy) {
   if (callId) {
     input.disabled = busy;
     sendButton.disabled = busy;
+    recordButton.disabled = busy;
   }
   sendButton.textContent = busy ? "…" : "Send";
 }
@@ -277,4 +335,5 @@ function setBusy(busy) {
 function showError(message) {
   callState.textContent = `Error: ${message}`;
   liveIndicator.classList.remove("active");
+  recordingStatus.textContent = message;
 }

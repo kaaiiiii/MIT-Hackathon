@@ -8,7 +8,9 @@ from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from .caller.adapters.elevenlabs_audio import ElevenLabsAudioAdapter
 from .caller.adapters.simulated import SimulatedVoiceSessionAdapter
+from .caller.audio import AudioPipelineAdapter
 from .caller.errors import (
     ConflictError,
     ExternalServiceError,
@@ -35,6 +37,7 @@ def create_app(
     inputs: CallerInputGateway | None = None,
     adapter: VoiceSessionAdapter | None = None,
     buyer_model: BuyerTurnModel | None = None,
+    audio_adapter: AudioPipelineAdapter | None = None,
 ) -> FastAPI:
     store = SQLiteCallerStore(
         database_path or os.getenv("CALLER_DB_PATH", "caller.sqlite3")
@@ -48,6 +51,8 @@ def create_app(
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         yield
+        if audio_adapter is not None:
+            await audio_adapter.close()
         store.close()
 
     app = FastAPI(title="Nego Caller API", version="0.1.0", lifespan=lifespan)
@@ -63,9 +68,13 @@ def create_app(
     )
     app.state.demo_orchestrator = demo_orchestrator
     app.include_router(
-        build_demo_router(TextVoiceSimulator(demo_orchestrator, buyer_model))
+        build_demo_router(
+            TextVoiceSimulator(demo_orchestrator, buyer_model),
+            audio_adapter,
+        )
     )
     app.state.demo_buyer_model = buyer_model
+    app.state.demo_audio_adapter = audio_adapter
 
     demo_directory = Path(__file__).resolve().parents[2] / "web" / "demo"
     app.mount("/demo", StaticFiles(directory=demo_directory, html=True), name="demo")
@@ -114,4 +123,20 @@ def _configured_buyer_model() -> BuyerTurnModel | None:
     )
 
 
-app = create_app(buyer_model=_configured_buyer_model())
+def _configured_audio_adapter() -> AudioPipelineAdapter | None:
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    voice_id = os.getenv("ELEVENLABS_VOICE_ID")
+    if not api_key or not voice_id:
+        return None
+    return ElevenLabsAudioAdapter(
+        api_key=api_key,
+        voice_id=voice_id,
+        stt_model=os.getenv("ELEVENLABS_STT_MODEL", "scribe_v2"),
+        tts_model=os.getenv("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5"),
+    )
+
+
+app = create_app(
+    buyer_model=_configured_buyer_model(),
+    audio_adapter=_configured_audio_adapter(),
+)

@@ -57,6 +57,11 @@ button { cursor: pointer; }
   border-radius: 20px; color: var(--acid); background: var(--acid-soft);
   font: 500 10px "DM Mono", monospace; text-transform: uppercase;
 }
+.audio-badge {
+  padding: 7px 10px; border: 1px solid rgba(140, 185, 255, .28);
+  border-radius: 20px; color: var(--blue); background: rgba(140, 185, 255, .08);
+  font: 500 10px "DM Mono", monospace; text-transform: uppercase;
+}
 .voice-controls select {
   width: 165px; padding: 9px 30px 9px 12px; color: var(--muted);
   background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
@@ -75,6 +80,12 @@ button { cursor: pointer; }
 .hero h1 { margin: 13px 0 12px; font-size: clamp(38px, 5vw, 70px); line-height: .98; letter-spacing: -.055em; }
 .hero h1 em { color: var(--muted); font-style: normal; font-weight: 500; }
 .hero p { max-width: 650px; margin: 0; color: var(--muted); font-size: 15px; line-height: 1.65; }
+.leverage-input { display: flex; align-items: center; gap: 10px; margin-top: 18px; color: var(--muted); font-size: 11px; }
+.leverage-input > span:first-child { color: var(--ink); font-weight: 700; }
+.leverage-input small { max-width: 270px; color: var(--faint); line-height: 1.35; }
+.money-input { display: flex; align-items: center; width: 105px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+.money-input b { color: var(--acid); font-size: 12px; }
+.money-input input { width: 100%; padding-left: 4px; color: var(--ink); background: transparent; border: 0; outline: 0; font: 11px "DM Mono"; }
 .primary-button {
   display: flex; gap: 40px; align-items: center; flex: 0 0 auto; padding: 15px 17px 15px 20px;
   color: #11150d; background: var(--acid); border: 0; border-radius: 10px; font-weight: 700;
@@ -134,6 +145,18 @@ button { cursor: pointer; }
 
 .composer { padding: 16px 20px 18px; border-top: 1px solid var(--line); background: #151916; }
 .composer label { display: block; margin-bottom: 7px; color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .04em; }
+.recording-row { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.recording-row > span { color: var(--faint); font-size: 10px; }
+.record-button {
+  display: flex; align-items: center; gap: 8px; min-width: 170px; padding: 9px 12px;
+  color: var(--ink); background: var(--panel-2); border: 1px solid var(--line);
+  border-radius: 9px; font-size: 11px; font-weight: 700;
+}
+.record-button:hover:not(:disabled) { border-color: var(--acid); }
+.record-button:disabled { opacity: .45; cursor: default; }
+.record-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--danger); }
+.record-button.recording { color: #15110f; background: var(--danger); border-color: var(--danger); }
+.record-button.recording .record-dot { background: #15110f; animation: pulse 1s infinite; }
 .composer-row { display: flex; gap: 9px; }
 .composer textarea { flex: 1; resize: none; padding: 11px 13px; color: var(--ink); background: #101310; border: 1px solid var(--line); border-radius: 9px; outline: none; font-size: 13px; line-height: 1.4; }
 .composer textarea:focus { border-color: #68745f; box-shadow: 0 0 0 3px rgba(200,255,74,.06); }
@@ -177,6 +200,7 @@ footer { display: flex; justify-content: space-between; padding: 25px 3px 32px; 
 @media (max-width: 900px) {
   .shell { padding: 0 18px; }
   .hero { align-items: start; flex-direction: column; gap: 25px; }
+  .leverage-input { align-items: flex-start; flex-wrap: wrap; }
   .workspace { grid-template-columns: 1fr; }
   .evidence-panel { border-left: 0; border-top: 1px solid var(--line); }
   .call-stage { gap: 12px; }
@@ -188,7 +212,6 @@ footer { display: flex; justify-content: space-between; padding: 25px 3px 32px; 
 @media (max-width: 560px) {
   .topbar { height: auto; padding: 17px 0; align-items: flex-start; }
   .voice-controls { align-items: flex-end; flex-direction: column; }
-  .voice-controls select { width: 135px; }
   .hero { padding-top: 38px; }
   .hero h1 { font-size: 40px; }
   .call-stage { flex-direction: column; align-items: stretch; padding: 13px; }
@@ -196,6 +219,7 @@ footer { display: flex; justify-content: space-between; padding: 25px 3px 32px; 
   .workspace { min-height: 0; }
   .conversation-panel { min-height: 600px; }
   .bubble { max-width: 100%; }
+  .recording-row { align-items: stretch; flex-direction: column; }
   .scenario-guide ol { grid-template-columns: 1fr; }
   .scenario-guide p { display: block; margin: 10px 0 0; }
   footer { flex-direction: column; gap: 7px; }

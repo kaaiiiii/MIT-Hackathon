@@ -6,6 +6,7 @@ from apps.api.app.caller.openai_agent import (
     ExtractedLineItem,
     ExtractedTerm,
 )
+from apps.api.app.caller.audio import SynthesizedAudio
 
 
 class FakeBuyerModel:
@@ -38,6 +39,24 @@ class FakeBuyerModel:
                 ],
             )
         return BuyerTurnDecision(spoken_response="Could you clarify the quote?")
+
+class FakeAudioAdapter:
+    def __init__(self):
+        self.transcriptions = ["Yes, I can discuss it."]
+        self.synthesized: list[str] = []
+
+    async def transcribe(self, audio, *, filename, media_type):
+        assert audio == b"recorded-vendor-audio"
+        assert filename == "vendor.webm"
+        assert media_type == "audio/webm"
+        return self.transcriptions.pop(0)
+
+    async def synthesize(self, text):
+        self.synthesized.append(text)
+        return SynthesizedAudio(b"generated-buyer-mp3", "audio/mpeg")
+
+    async def close(self):
+        pass
 
 
 def send(client: TestClient, call_id: str, text: str):
@@ -99,7 +118,7 @@ def test_demo_page_is_served(tmp_path):
     with TestClient(app) as client:
         response = client.get("/demo/")
         assert response.status_code == 200
-        assert "Type as the vendor" in response.text
+        assert "Speak as the vendor" in response.text
         assert "/demo/app.js" in response.text
 
 
@@ -124,3 +143,87 @@ def test_injected_gpt_model_handles_custom_vendor_language(tmp_path):
             term["category"] == "estimated_total" and term["value"] == 640
             for term in quote["terms"]
         )
+
+
+def test_voice_pipeline_transcribes_runs_turn_and_synthesizes(tmp_path):
+    audio = FakeAudioAdapter()
+    app = create_app(
+        database_path=str(tmp_path / "voice.db"),
+        buyer_model=FakeBuyerModel(),
+        audio_adapter=audio,
+    )
+    with TestClient(app) as client:
+        started = client.post("/api/v1/demo/voice/sessions")
+        assert started.status_code == 200, started.text
+        start_body = started.json()
+        call_id = start_body["call"]["call"]["call_id"]
+        assert start_body["audio_content_type"] == "audio/mpeg"
+        assert start_body["audio_base64"]
+
+        response = client.post(
+            f"/api/v1/demo/voice/sessions/{call_id}/messages",
+            files={"audio": ("vendor.webm", b"recorded-vendor-audio", "audio/webm")},
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["transcription"] == "Yes, I can discuss it."
+        assert body["model"] == "gpt-5.4-test"
+        assert body["call"]["call"]["status"] == "quote_collection"
+        assert body["call"]["transcript"][-2]["text"] == "Yes, I can discuss it."
+        assert body["audio_base64"]
+        assert len(audio.synthesized) == 2
+
+
+def test_voice_endpoint_explains_missing_elevenlabs_configuration(tmp_path):
+    app = create_app(database_path=str(tmp_path / "no-voice.db"))
+    with TestClient(app) as client:
+        response = client.post("/api/v1/demo/voice/sessions")
+        assert response.status_code == 502
+        assert "ELEVENLABS_API_KEY" in response.json()["detail"]
+
+
+def test_demo_tracks_both_parties_and_uses_only_verified_leverage(tmp_path):
+    app = create_app(database_path=str(tmp_path / "leverage.db"))
+    verified_bid = {
+        "bid_id": "bid_verified_425",
+        "source_call_id": "call_previous_vendor",
+        "job_spec_version_id": "demo_spec_piano",
+        "total": 425,
+        "currency": "USD",
+        "binding_status": "binding",
+        "evidence_reference": "transcript://call_previous_vendor/te_42",
+    }
+    with TestClient(app) as client:
+        started = client.post(
+            "/api/v1/demo/sessions",
+            json={"verified_competing_bid": verified_bid},
+        )
+        assert started.status_code == 200, started.text
+        body = started.json()
+        call_id = body["call"]["call"]["call_id"]
+
+        body = send(client, call_id, "Yes, I can discuss it.")
+        body = send(
+            client,
+            call_id,
+            "We charge a flat price. Labor is $350, stairs are $75, and the total is $475.",
+        )
+        body = send(
+            client,
+            call_id,
+            "There are no additional fees. The total is binding, and we are available August 1.",
+        )
+
+        assert body["call"]["call"]["status"] == "quote_clarification"
+        assert "verified competing quote for $425.00" in body["agent_message"]
+        assert body["call"]["call"]["policy"]["approved_leverage_bid_id"] == "bid_verified_425"
+        speakers = {event["speaker"] for event in body["call"]["transcript"]}
+        assert speakers == {"agent", "vendor"}
+
+        body = send(client, call_id, "We can lower the total to $450.")
+        assert body["call"]["call"]["status"] == "summary_confirmation"
+        assert "$450.00" in body["agent_message"]
+        assert sum(
+            "verified competing quote" in event["text"]
+            for event in body["call"]["transcript"]
+        ) == 1

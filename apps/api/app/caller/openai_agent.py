@@ -84,10 +84,9 @@ class OpenAIBuyerTurnModel:
             "current_call_state": view.call.status.value,
             "confirmed_job_spec": self._job_spec(view),
             "quote_so_far": view.original_quote.model_dump(mode="json"),
-            "recent_transcript": [
-                {"speaker": event.speaker, "text": event.text}
-                for event in view.transcript[-12:]
-            ],
+            "conversation_history": self._conversation_history(view),
+            "full_transcript_event_count": len(view.transcript),
+            "approved_verified_leverage": self._approved_leverage(view),
             "latest_vendor_statement": vendor_text,
             "required_conversation_goal": self._goal(view),
         }
@@ -121,6 +120,37 @@ class OpenAIBuyerTurnModel:
         }
 
     @staticmethod
+    def _conversation_history(
+        view: CallView, max_characters: int = 24_000
+    ) -> list[dict[str, str | int]]:
+        """Keep the durable transcript complete in SQLite and send a bounded tail."""
+        selected = []
+        used = 0
+        for event in reversed(view.transcript):
+            cost = len(event.text) + 40
+            if selected and used + cost > max_characters:
+                break
+            selected.append(
+                {
+                    "sequence": event.sequence,
+                    "speaker": event.speaker,
+                    "text": event.text,
+                }
+            )
+            used += cost
+        return list(reversed(selected))
+
+    @staticmethod
+    def _approved_leverage(view: CallView) -> dict | None:
+        approved_id = view.call.policy.approved_leverage_bid_id
+        if approved_id is None:
+            return None
+        for bid in view.call.policy.verified_competing_bids:
+            if bid.bid_id == approved_id:
+                return bid.model_dump(mode="json")
+        return None
+
+    @staticmethod
     def _goal(view: CallView) -> str:
         status = view.call.status.value
         quote = view.original_quote
@@ -149,7 +179,17 @@ class OpenAIBuyerTurnModel:
                 )
                 if category not in categories
             ]
-            return "Clarify the next missing term: " + ", ".join(missing)
+            if missing:
+                return "Clarify the next missing term: " + ", ".join(missing)
+            leverage = OpenAIBuyerTurnModel._approved_leverage(view)
+            if leverage is not None:
+                return (
+                    "Respond to the vendor's answer. If the approved verified bid has "
+                    "already been presented, clarify any revised price or term. "
+                    "Otherwise, ask whether the vendor can match or beat its exact "
+                    "terms without inventing additional leverage."
+                )
+            return "Prepare to confirm the evidence-backed quote summary."
         if status == "summary_confirmation":
             return "Determine whether the vendor confirms the readback or corrects it."
         return "Continue the quote conversation without changing the confirmed job."

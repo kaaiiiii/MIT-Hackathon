@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class CallStatus(StrEnum):
@@ -53,6 +53,20 @@ class VendorTarget(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class VerifiedCompetingBid(BaseModel):
+    """Comparison-owned leverage that the Caller is explicitly allowed to state."""
+
+    model_config = ConfigDict(frozen=True)
+
+    bid_id: str = Field(min_length=1)
+    source_call_id: str = Field(min_length=1)
+    job_spec_version_id: str = Field(min_length=1)
+    total: float = Field(gt=0)
+    currency: str = Field(default="USD", min_length=3, max_length=3)
+    binding_status: Literal["binding", "non_binding", "unclear"] = "unclear"
+    evidence_reference: str = Field(min_length=1)
+
+
 class CallPolicy(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -62,6 +76,23 @@ class CallPolicy(BaseModel):
     probe_hidden_fees: bool = True
     allow_callback: bool = True
     custom_questions: tuple[str, ...] = ()
+    verified_competing_bids: tuple[VerifiedCompetingBid, ...] = ()
+    approved_leverage_bid_id: str | None = None
+
+    @model_validator(mode="after")
+    def approved_bid_must_be_verified(self) -> "CallPolicy":
+        if self.approved_leverage_bid_id is None:
+            return self
+        matching = [
+            bid
+            for bid in self.verified_competing_bids
+            if bid.bid_id == self.approved_leverage_bid_id
+        ]
+        if len(matching) != 1:
+            raise ValueError(
+                "approved_leverage_bid_id must identify exactly one verified bid"
+            )
+        return self
 
 
 class AgentConfiguration(BaseModel):
