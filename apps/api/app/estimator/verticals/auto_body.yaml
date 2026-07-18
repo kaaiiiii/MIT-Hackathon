@@ -1,0 +1,37 @@
+vertical: auto_body
+schema_version: "1.0"
+interview_plan:
+  max_attempts_per_field: 2
+  completeness_threshold: 1.0
+fields:
+  vehicle.year_make_model:
+    type: string
+    required: true
+    priority: 100
+    question: "What is the vehicle year, make, and model?"
+    catalog_shaped: true
+  repair.scope:
+    type: string
+    required: true
+    priority: 95
+    question: "What damage or repair work needs an estimate?"
+  vehicle.location:
+    type: string
+    required: true
+    priority: 90
+    question: "Where is the vehicle located?"
+  requested_date:
+    type: string
+    required: true
+    priority: 85
+    question: "When do you need the repair completed?"
+document_types:
+  repair_order_json:
+    parser_hint: structured_repair_order_or_ocr
+    review_threshold: 0.8
+catalog_candidate_limit: 5
+catalog_resolvers:
+  vehicle.year_make_model:
+    - vehicle_catalog
+benchmark_sources:
+  - repairpal.com

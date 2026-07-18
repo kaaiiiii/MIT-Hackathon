@@ -1,8 +1,43 @@
-# Nego Caller
+# Nego Estimator and Caller
 
 The Caller is an isolated FastAPI service for one vendor conversation against one
 immutable, confirmed job specification. It incrementally stores quote claims with
 vendor transcript evidence and finalizes exactly one structured conversation outcome.
+
+The Estimator is the upstream evidence-first intake module. It accumulates voice,
+document-region, and user-selected catalog evidence into a versioned draft and writes
+to `job_spec_versions` only after explicit user confirmation.
+
+## Estimator backbone
+
+- `POST /api/v1/intake/sessions` starts or resumes a vertical-configured draft.
+- `POST /api/v1/intake/sessions/{id}/voice` starts an ElevenLabs Agents connection or
+  applies one evidenced transcript turn through the deterministic question planner.
+- `POST /api/v1/intake/sessions/{id}/documents` parses one supported document and
+  retains page/line/bounding-box provenance.
+- `POST /api/v1/intake/sessions/{id}/resolve` starts catalog search or records the
+  user's explicit candidate selection. The resolver never auto-selects.
+- `GET /api/v1/intake/sessions/{id}` returns selected fields, all evidence candidates,
+  unresolved conflicts, missing required fields, and pending catalog choices.
+- `POST /api/v1/intake/sessions/{id}/confirm` is the sole write path to
+  `job_spec_versions`.
+- Confirmed edits clone into a new draft and version. Old shared versions remain
+  readable by the Caller while Estimator metadata marks their lineage as superseded.
+- The confirmed canonical hash is byte-compatible with the Caller's immutable-spec
+  SHA-256 calculation and is verified in the end-to-end test suite.
+
+Moving-specific fields, question priority, document types, catalog resolvers, and
+benchmark sources live in `estimator/verticals/moving.yaml`, not Python control flow.
+See [`docs/ESTIMATOR.md`](docs/ESTIMATOR.md) for the contracts and examples.
+
+For a no-JSON local test, start the API and open
+`http://127.0.0.1:8000/demo/estimator.html`. The Estimator Lab provides editable
+sample fields, builds the evidence-backed draft, and confirms the immutable version
+with two buttons. After confirmation, **Continue to Caller Lab** starts the Caller
+against that exact `version_id`; the lab verifies the stored canonical hash and shows
+the Estimator facts and their provenance on its evidence board. The read-only
+`GET /api/v1/intake/specs/{version_id}` endpoint supplies each value, modality,
+confidence, and voice-turn/document-region/catalog reference before the call starts.
 
 ## What is implemented
 
@@ -22,6 +57,17 @@ vendor transcript evidence and finalizes exactly one structured conversation out
   evidence is mandatory and cross-call evidence is rejected.
 - Both sides of every conversation are durably stored in sequence and supplied to
   GPT as bounded conversation history, alongside the cumulative structured quote.
+- A deterministic dialogue planner chooses exactly one next action. GPT phrases that
+  action naturally and extracts only the latest vendor statement; it does not control
+  the overall call strategy.
+- Caller prompting is split into two runtime layers: `negotiation_policy.txt` teaches
+  broad human communication and ethical negotiation judgment, while
+  `text_buyer_agent.txt` only realizes the planner-selected action and extracts the
+  latest evidenced facts.
+- Missing customer information follows a two-turn policy: request a provisional range,
+  then capture exact callback requirements, then finalize a callback-required outcome.
+- Spoken responses are checked for length, multiple questions, robotic openers, formal
+  template phrases, and repetition. One wording-only GPT retry is allowed.
 - Competing-bid leverage must be supplied as a verified, evidence-referenced policy
   input for the same immutable job. The Caller cannot select or invent leverage.
 - A deterministic simulated voice adapter supports end-to-end development before
@@ -48,7 +94,10 @@ apps/api/app/caller/
 ├── evidence.py               # Transcript evidence enforcement
 ├── persistence.py            # Caller-owned SQLite tables
 ├── input_gateway.py          # Read-only upstream integration
-├── prompts/buyer_agent.txt   # Conversational behavior only
+├── prompts/
+│   ├── negotiation_policy.txt # Broad communication and negotiation policy
+│   ├── text_buyer_agent.txt   # Planner-action surface realization
+│   └── buyer_agent.txt        # Provider voice-agent tool prompt
 ├── tools/                    # Voice-agent backend tools
 └── adapters/                 # Simulated and ElevenLabs provider seams
 ```
@@ -77,6 +126,17 @@ $env:OPENAI_API_KEY = "your-openai-key"
 $env:ELEVENLABS_API_KEY = "your-elevenlabs-key"
 $env:ELEVENLABS_VOICE_ID = "your-elevenlabs-voice-id"
 ```
+
+To start the Estimator voice interview through ElevenLabs Agents, also configure the
+Agent ID. The backend returns a short-lived signed WebSocket URL; it never sends the
+ElevenLabs API key to the browser.
+
+```powershell
+$env:ELEVENLABS_INTAKE_AGENT_ID = "agent_your_intake_agent_id"
+```
+
+Without this value, the intake voice endpoint uses the simulated adapter while the
+draft, evidence, planner, and confirmation flow remain fully testable.
 
 The keys stay server-side and are never sent to the browser. Optional model overrides
 default to `gpt-5.4`, `scribe_v2`, and `eleven_flash_v2_5`:
@@ -195,6 +255,27 @@ created -> connecting -> disclosure -> job_presentation -> quote_collection
 
 Technical connection failures terminate as `failed`; they are distinct from the four
 valid outcomes of a conversation that actually connected.
+
+## Conversation policy
+
+`dialogue_planner.py` calculates the current objective, missing customer facts, vendor
+requirements, quote progress, allowed actions, and one selected action before GPT is
+called. `spoken_response.py` validates the resulting wording before ElevenLabs TTS.
+The complete transcript and quote state remain the source of conversational memory.
+
+The main spoken-turn acceptance rules are:
+
+- no more than one question mark;
+- no more than 45 words, with most planned turns targeting fewer than 30;
+- no generic `Understood`/`Got it` opener;
+- no near-duplicate of the previous buyer turn;
+- one conversational objective per turn;
+- an information blocker reaches a provisional quote, callback requirement, or
+  incomplete outcome rather than looping.
+
+The demo API returns `pipeline_timings_ms` for speech-to-text, GPT/Caller processing,
+text-to-speech, and total turn time so latency can be measured rather than inferred
+from transcript timestamps.
 
 ## Evidence rule
 

@@ -7,8 +7,14 @@ from typing import Literal, Protocol
 from openai import AsyncOpenAI, OpenAIError
 from pydantic import BaseModel, Field
 
+from .dialogue_planner import DialogueAction, DialoguePlan, DialoguePlanner
 from .errors import ExternalServiceError
 from .schemas import CallView
+from .spoken_response import (
+    previous_buyer_turn,
+    recent_buyer_turns,
+    validate_spoken_response,
+)
 
 
 TermCategory = Literal[
@@ -22,6 +28,7 @@ TermCategory = Literal[
     "availability",
     "binding_status",
     "estimated_total",
+    "vendor_requirement",
 ]
 
 
@@ -54,12 +61,18 @@ class BuyerTurnDecision(BaseModel):
     ] = "continue"
     line_items: list[ExtractedLineItem] = Field(default_factory=list)
     terms: list[ExtractedTerm] = Field(default_factory=list)
+    planned_action: DialogueAction = DialogueAction.CONTINUE
 
 
 class BuyerTurnModel(Protocol):
     model_name: str
 
-    async def respond(self, view: CallView, vendor_text: str) -> BuyerTurnDecision: ...
+    async def respond(
+        self,
+        view: CallView,
+        vendor_text: str,
+        job_facts: dict | None = None,
+    ) -> BuyerTurnDecision: ...
 
 
 class OpenAIBuyerTurnModel:
@@ -76,47 +89,98 @@ class OpenAIBuyerTurnModel:
         self.model_name = model
         self.job_facts = job_facts or {}
         self.client = client or AsyncOpenAI(api_key=api_key)
-        prompt_path = Path(__file__).with_name("prompts") / "text_buyer_agent.txt"
-        self.instructions = prompt_path.read_text(encoding="utf-8")
+        self.planner = DialoguePlanner()
+        prompt_directory = Path(__file__).with_name("prompts")
+        self.communication_policy = (
+            prompt_directory / "negotiation_policy.txt"
+        ).read_text(encoding="utf-8")
+        self.surface_instructions = (
+            prompt_directory / "text_buyer_agent.txt"
+        ).read_text(encoding="utf-8")
+        self.instructions = (
+            f"{self.communication_policy.strip()}\n\n"
+            f"{self.surface_instructions.strip()}\n"
+        )
 
-    async def respond(self, view: CallView, vendor_text: str) -> BuyerTurnDecision:
+    async def respond(
+        self,
+        view: CallView,
+        vendor_text: str,
+        job_facts: dict | None = None,
+    ) -> BuyerTurnDecision:
+        active_job_facts = job_facts if job_facts is not None else self.job_facts
+        plan = self.planner.plan(view, vendor_text, active_job_facts)
         payload = {
             "current_call_state": view.call.status.value,
-            "confirmed_job_spec": self._job_spec(view),
+            "confirmed_job_spec": self._job_spec(view, active_job_facts),
             "quote_so_far": view.original_quote.model_dump(mode="json"),
             "conversation_history": self._conversation_history(view),
             "full_transcript_event_count": len(view.transcript),
             "approved_verified_leverage": self._approved_leverage(view),
             "latest_vendor_statement": vendor_text,
-            "required_conversation_goal": self._goal(view),
+            "dialogue_plan": plan.model_dump(mode="json"),
         }
         try:
-            response = await self.client.responses.parse(
-                model=self.model_name,
-                reasoning={"effort": "none"},
-                text={"verbosity": "low"},
-                instructions=self.instructions,
-                input=json.dumps(payload, ensure_ascii=False),
-                text_format=BuyerTurnDecision,
-                max_output_tokens=1200,
-                store=False,
+            decision = await self._request_decision(payload)
+            previous = previous_buyer_turn(view.transcript)
+            recent = recent_buyer_turns(view.transcript)
+            check = validate_spoken_response(
+                decision.spoken_response,
+                previous,
+                recent,
             )
+            if not check.valid:
+                retry_payload = {
+                    **payload,
+                    "response_validation_failure": check.reason,
+                    "retry_instruction": (
+                        "Rewrite only the spoken response. Keep the exact selected "
+                        "action, intent, and extracted facts. Use at most 45 words "
+                        "and no more than one question mark."
+                    ),
+                }
+                retry = await self._request_decision(retry_payload)
+                retry_check = validate_spoken_response(
+                    retry.spoken_response,
+                    previous,
+                    recent,
+                )
+                spoken = (
+                    retry.spoken_response
+                    if retry_check.valid
+                    else self._fallback_spoken(plan)
+                )
+                decision = decision.model_copy(update={"spoken_response": spoken})
         except OpenAIError as exc:
             raise ExternalServiceError(
                 "OpenAI could not generate the buyer response. Check the API key, "
                 "project access, billing, and model permissions."
             ) from exc
 
+        return decision.model_copy(update={"planned_action": plan.selected_action})
+
+    async def _request_decision(self, payload: dict) -> BuyerTurnDecision:
+        response = await self.client.responses.parse(
+            model=self.model_name,
+            reasoning={"effort": "none"},
+            text={"verbosity": "low"},
+            instructions=self.instructions,
+            input=json.dumps(payload, ensure_ascii=False),
+            text_format=BuyerTurnDecision,
+            max_output_tokens=900,
+            store=False,
+        )
         decision = response.output_parsed
         if decision is None:
             raise ExternalServiceError("OpenAI returned no structured buyer response")
         return decision
 
-    def _job_spec(self, view: CallView) -> dict:
+    @staticmethod
+    def _job_spec(view: CallView, job_facts: dict) -> dict:
         return {
             "job_spec_version_id": view.call.job_spec_version_id,
             "spec_sha256": view.call.spec_sha256,
-            "facts": self.job_facts,
+            "facts": job_facts,
         }
 
     @staticmethod
@@ -151,45 +215,27 @@ class OpenAIBuyerTurnModel:
         return None
 
     @staticmethod
-    def _goal(view: CallView) -> str:
-        status = view.call.status.value
-        quote = view.original_quote
-        categories = {term.category for term in quote.terms}
-        if status == "disclosure":
-            return (
-                "If the vendor agrees to continue, present the confirmed piano-moving "
-                "job already stated by the buyer context and ask how the vendor prices it."
-            )
-        if status == "quote_collection":
-            missing = []
-            if "pricing_model" not in categories:
-                missing.append("pricing model")
-            if not quote.line_items:
-                missing.append("itemized costs")
-            if "estimated_total" not in categories:
-                missing.append("estimated total")
-            return "Ask naturally for the next missing quote field: " + ", ".join(missing)
-        if status == "quote_clarification":
-            missing = [
-                label
-                for category, label in (
-                    ("fee", "additional or hidden fees"),
-                    ("binding_status", "binding status"),
-                    ("availability", "availability for August 1, 2026"),
-                )
-                if category not in categories
-            ]
-            if missing:
-                return "Clarify the next missing term: " + ", ".join(missing)
-            leverage = OpenAIBuyerTurnModel._approved_leverage(view)
-            if leverage is not None:
-                return (
-                    "Respond to the vendor's answer. If the approved verified bid has "
-                    "already been presented, clarify any revised price or term. "
-                    "Otherwise, ask whether the vendor can match or beat its exact "
-                    "terms without inventing additional leverage."
-                )
-            return "Prepare to confirm the evidence-backed quote summary."
-        if status == "summary_confirmation":
-            return "Determine whether the vendor confirms the readback or corrects it."
-        return "Continue the quote conversation without changing the confirmed job."
+    def _fallback_spoken(plan: DialoguePlan) -> str:
+        responses = {
+            DialogueAction.PRESENT_JOB: "Could you give me a rough price range for the confirmed piano move?",
+            DialogueAction.REQUEST_PRICING_MODEL: "Would that be a flat price or an hourly rate?",
+            DialogueAction.REQUEST_ITEMIZATION: "What is the main cost in that estimate?",
+            DialogueAction.REQUEST_TOTAL: "What total should the customer expect?",
+            DialogueAction.CLARIFY_FEES: "What extra charges should the customer expect?",
+            DialogueAction.CLARIFY_BINDING: "Is that total binding?",
+            DialogueAction.CLARIFY_AVAILABILITY: "Are you available on August 1?",
+            DialogueAction.REQUEST_PROVISIONAL_RANGE: (
+                "We don't have those measurements yet. Could you give a provisional "
+                "range for a standard upright?"
+            ),
+            DialogueAction.REQUEST_CALLBACK_REQUIREMENTS: (
+                "What exact information should we send, and when could you return the quote?"
+            ),
+            DialogueAction.CLOSE_CALLBACK_REQUIRED: (
+                "I'll record this as requiring a callback after those details are provided."
+            ),
+            DialogueAction.USE_VERIFIED_LEVERAGE: "Can you match the verified competing bid?",
+            DialogueAction.CONFIRM_SUMMARY: "Is that summary accurate?",
+            DialogueAction.CONTINUE: "What is the next step for getting a quote?",
+        }
+        return responses[plan.selected_action]

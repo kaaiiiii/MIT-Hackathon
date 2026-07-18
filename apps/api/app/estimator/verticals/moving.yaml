@@ -1,0 +1,72 @@
+vertical: moving
+schema_version: "1.0"
+interview_plan:
+  max_attempts_per_field: 2
+  completeness_threshold: 1.0
+fields:
+  service:
+    type: string
+    required: true
+    priority: 100
+    question: "What needs to be moved?"
+  origin.location:
+    type: string
+    required: true
+    priority: 95
+    question: "Where is the pickup?"
+  destination.location:
+    type: string
+    required: true
+    priority: 94
+    question: "Where is the delivery?"
+  requested_date:
+    type: string
+    required: true
+    priority: 90
+    question: "What date do you want the move?"
+  item.type:
+    type: string
+    required: true
+    priority: 88
+    question: "What type of item is it?"
+  item.dimensions:
+    type: string
+    required: true
+    priority: 82
+    question: "Do you know its dimensions?"
+    catalog_shaped: false
+  item.weight:
+    type: string
+    required: true
+    priority: 81
+    question: "Do you know its approximate weight?"
+  origin.access:
+    type: string
+    required: true
+    priority: 78
+    question: "What is the pickup access like, including stairs or elevator?"
+  destination.access:
+    type: string
+    required: true
+    priority: 77
+    question: "What is the delivery access like, including stairs or elevator?"
+  item.catalog_identity:
+    type: string
+    required: false
+    priority: 40
+    question: "Do you know the brand or model?"
+    catalog_shaped: true
+document_types:
+  moving_inventory_json:
+    parser_hint: structured_inventory_or_vision
+    review_threshold: 0.8
+  existing_quote_json:
+    parser_hint: structured_quote_or_ocr
+    review_threshold: 0.8
+catalog_candidate_limit: 5
+catalog_resolvers:
+  item.catalog_identity:
+    - furniture_catalog
+benchmark_sources:
+  - ikea.com/us
+  - manufacturer_catalog

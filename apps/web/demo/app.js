@@ -20,6 +20,14 @@ const recordButton = document.querySelector("#record-button");
 const recordLabel = document.querySelector("#record-label");
 const recordingStatus = document.querySelector("#recording-status");
 const competingBidTotal = document.querySelector("#competing-bid-total");
+const jobVersion = document.querySelector("#job-version");
+const jobTitle = document.querySelector("#job-title");
+const jobDetails = document.querySelector("#job-details");
+const jobEvidenceSummary = document.querySelector("#job-evidence-summary");
+
+const requestedJobSpecVersionId = new URLSearchParams(window.location.search).get(
+  "job_spec_version_id",
+);
 
 let callId = null;
 let lastAudio = null;
@@ -27,6 +35,9 @@ let isBusy = false;
 let mediaRecorder = null;
 let microphoneStream = null;
 let audioChunks = [];
+let connectedEstimatorSpec = null;
+let jobEvidenceCount = 0;
+let quoteEvidenceCount = 0;
 
 const stateOrder = [
   "disclosure",
@@ -92,19 +103,19 @@ startButton.addEventListener("click", async () => {
   setBusy(true);
   try {
     const total = Number(competingBidTotal.value);
-    const payload = Number.isFinite(total) && total > 0
-      ? {
-          verified_competing_bid: {
+    const activeJobSpecVersionId = requestedJobSpecVersionId ?? "demo_spec_piano";
+    const payload = { job_spec_version_id: activeJobSpecVersionId };
+    if (Number.isFinite(total) && total > 0) {
+      payload.verified_competing_bid = {
             bid_id: `demo_bid_${Date.now()}`,
             source_call_id: "demo_verified_source_call",
-            job_spec_version_id: "demo_spec_piano",
+            job_spec_version_id: activeJobSpecVersionId,
             total,
             currency: "USD",
             binding_status: "binding",
             evidence_reference: "demo://user-confirmed-competing-bid",
-          },
-        }
-      : {};
+      };
+    }
     const data = await api("/api/v1/demo/voice/sessions", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -193,7 +204,8 @@ async function submitRecording() {
     });
     render(data);
     playVoice(data);
-    recordingStatus.textContent = `ElevenLabs heard: “${data.transcription}”`;
+    const latency = data.pipeline_timings_ms?.total;
+    recordingStatus.textContent = `ElevenLabs heard: “${data.transcription}”${latency ? ` · ${latency} ms` : ""}`;
   } catch (error) {
     showError(error.message);
   } finally {
@@ -220,6 +232,11 @@ function render(data) {
   const status = view.call.status;
   const terminal = data.terminal;
   modelBadge.textContent = data.model;
+  renderJob(
+    data.confirmed_job_facts,
+    view.call.job_spec_version_id,
+    connectedEstimatorSpec?.fields ?? {},
+  );
   emptyState.hidden = true;
   transcript.hidden = false;
   callState.textContent = stateLabels[status] ?? status;
@@ -234,6 +251,111 @@ function render(data) {
   recordButton.disabled = terminal;
   input.placeholder = terminal ? "This call has ended." : "Or type the vendor’s reply…";
 }
+
+function renderJob(facts = {}, versionId = "demo_spec_piano", evidencedFields = {}) {
+  const labels = {
+    service: "Service",
+    "origin.location": "Pickup",
+    origin: "Pickup",
+    "destination.location": "Delivery",
+    destination: "Delivery",
+    requested_date: "Date",
+    "item.type": "Item",
+    "item.dimensions": "Dimensions",
+    "item.weight": "Weight",
+    "origin.access": "Pickup access",
+    "destination.access": "Delivery access",
+    stairs: "Stairs",
+  };
+  const priority = Object.keys(labels);
+  const entries = Object.entries(facts).sort(([left], [right]) => {
+    const leftIndex = priority.indexOf(left);
+    const rightIndex = priority.indexOf(right);
+    return (leftIndex < 0 ? 999 : leftIndex) - (rightIndex < 0 ? 999 : rightIndex);
+  });
+  jobVersion.textContent = versionId === "demo_spec_piano"
+    ? "CONFIRMED JOB · BUILT-IN DEMO"
+    : "CONFIRMED JOB · ESTIMATOR";
+  jobTitle.textContent = String(facts.service ?? facts["item.type"] ?? "Confirmed job");
+  renderEvidenceSummary(evidencedFields);
+  jobDetails.replaceChildren();
+  entries.forEach(([key, value]) => {
+    const row = document.createElement("div");
+    const term = document.createElement("dt");
+    const description = document.createElement("dd");
+    term.textContent = labels[key] ?? key.replaceAll(".", " ").replaceAll("_", " ");
+    const valueLine = document.createElement("span");
+    valueLine.textContent = String(value);
+    description.append(valueLine);
+    row.append(term, description);
+    jobDetails.append(row);
+  });
+  jobEvidenceCount = Object.keys(evidencedFields).length;
+  updateEvidenceCount();
+}
+
+function renderEvidenceSummary(evidencedFields) {
+  const groups = new Map();
+  Object.values(evidencedFields).forEach((evidence) => {
+    const label = describeEvidence(evidence);
+    groups.set(label, (groups.get(label) ?? 0) + 1);
+  });
+  jobEvidenceSummary.replaceChildren();
+  jobEvidenceSummary.hidden = groups.size === 0;
+  groups.forEach((count, label) => {
+    const item = document.createElement("span");
+    item.textContent = `${count} ${count === 1 ? "field" : "fields"} · ${label}`;
+    jobEvidenceSummary.append(item);
+  });
+}
+
+function describeEvidence(evidence) {
+  const modality = evidence.source?.modality ?? "unknown source";
+  const confidence = evidence.confidence ?? "unknown confidence";
+  const reference = evidence.source?.reference;
+  const sourceLabels = {
+    voice: "Voice interview",
+    document: reference?.filename === "browser-intake.json"
+      ? "Estimator form"
+      : "Uploaded document",
+    catalog_resolution: "Catalog selection",
+  };
+  const confidenceLabels = {
+    explicit: "directly provided",
+    elicited: "answered during intake",
+    user_confirmed_suggestion: "user confirmed",
+    unknown: "unknown acknowledged",
+  };
+  return `${sourceLabels[modality] ?? "Intake evidence"} · ${confidenceLabels[confidence] ?? "confirmed"}`;
+}
+
+async function loadConnectedEstimatorSpec() {
+  if (!requestedJobSpecVersionId) return;
+  try {
+    connectedEstimatorSpec = await api(
+      `/api/v1/intake/specs/${encodeURIComponent(requestedJobSpecVersionId)}`,
+    );
+    const facts = Object.fromEntries(
+      Object.entries(connectedEstimatorSpec.fields).map(([name, evidence]) => [
+        name,
+        evidence.value,
+      ]),
+    );
+    renderJob(facts, connectedEstimatorSpec.version_id, connectedEstimatorSpec.fields);
+    callState.textContent = "Estimator evidence loaded";
+  } catch (error) {
+    jobTitle.textContent = "Could not load Estimator evidence";
+    jobDetails.querySelector("dd").textContent = error.message;
+  }
+}
+
+if (requestedJobSpecVersionId) {
+  jobVersion.textContent = "CONFIRMED JOB · ESTIMATOR CONNECTED";
+  jobTitle.textContent = "Estimator specification ready";
+  jobDetails.querySelector("dd").textContent = "Select Start test call to load it";
+}
+
+loadConnectedEstimatorSpec();
 
 function renderStages(status) {
   const currentIndex = stateOrder.indexOf(status);
@@ -280,7 +402,8 @@ function renderQuote(quote) {
   });
   quoteEmpty.hidden = facts.length > 0;
   quoteStatus.textContent = quote.status === "final" ? "Finalized" : facts.length ? "Capturing" : "Waiting";
-  evidenceCount.textContent = `${facts.length} ${facts.length === 1 ? "fact" : "facts"}`;
+  quoteEvidenceCount = facts.length;
+  updateEvidenceCount();
   facts.forEach((fact) => {
     const row = document.createElement("div");
     row.className = "fact";
@@ -296,6 +419,14 @@ function renderQuote(quote) {
     row.append(content, evidence);
     quoteFacts.append(row);
   });
+}
+
+function updateEvidenceCount() {
+  if (jobEvidenceCount) {
+    evidenceCount.textContent = `${jobEvidenceCount} job · ${quoteEvidenceCount} quote`;
+    return;
+  }
+  evidenceCount.textContent = `${quoteEvidenceCount} ${quoteEvidenceCount === 1 ? "fact" : "facts"}`;
 }
 
 function renderOutcome(outcome) {

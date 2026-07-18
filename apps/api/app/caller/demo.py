@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import re
+from time import perf_counter
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -9,6 +10,7 @@ from fastapi import APIRouter, File, UploadFile
 from pydantic import BaseModel, Field
 
 from .audio import AudioPipelineAdapter
+from .dialogue_planner import DialogueAction, DialoguePlan, DialoguePlanner
 from .errors import ExternalServiceError
 from .orchestrator import CallOrchestrator
 from .openai_agent import BuyerTurnDecision, BuyerTurnModel
@@ -55,12 +57,14 @@ class DemoMessageRequest(BaseModel):
 
 
 class DemoStartRequest(BaseModel):
+    job_spec_version_id: str | None = None
     verified_competing_bid: VerifiedCompetingBid | None = None
 
 
 class DemoTurnResponse(BaseModel):
     agent_message: str
     call: CallView
+    confirmed_job_facts: dict = Field(default_factory=dict)
     terminal: bool
     model: str
 
@@ -70,6 +74,7 @@ class DemoVoiceTurnResponse(DemoTurnResponse):
     audio_base64: str
     audio_content_type: str
     audio_provider: str = "elevenlabs"
+    pipeline_timings_ms: dict[str, float] = Field(default_factory=dict)
 
 
 class VoiceTurnPipeline:
@@ -86,8 +91,12 @@ class VoiceTurnPipeline:
     async def start(
         self, request: DemoStartRequest | None = None
     ) -> DemoVoiceTurnResponse:
+        started = perf_counter()
         turn = await self.simulator.start(request)
-        return await self._with_audio(turn)
+        return await self._with_audio(
+            turn,
+            timings={"caller": self._elapsed_ms(started)},
+        )
 
     async def receive_audio(
         self,
@@ -97,33 +106,56 @@ class VoiceTurnPipeline:
         filename: str,
         media_type: str,
     ) -> DemoVoiceTurnResponse:
+        started = perf_counter()
         transcription = await self.audio_adapter.transcribe(
             audio,
             filename=filename,
             media_type=media_type,
         )
+        stt_ms = self._elapsed_ms(started)
+        started = perf_counter()
         turn = await self.simulator.receive(call_id, transcription)
-        return await self._with_audio(turn, transcription=transcription)
+        caller_ms = self._elapsed_ms(started)
+        return await self._with_audio(
+            turn,
+            transcription=transcription,
+            timings={"speech_to_text": stt_ms, "gpt_and_caller": caller_ms},
+        )
 
     async def receive_text(
         self, call_id: str, text: str
     ) -> DemoVoiceTurnResponse:
+        started = perf_counter()
         turn = await self.simulator.receive(call_id, text)
-        return await self._with_audio(turn, transcription=text)
+        return await self._with_audio(
+            turn,
+            transcription=text,
+            timings={"gpt_and_caller": self._elapsed_ms(started)},
+        )
 
     async def _with_audio(
         self,
         turn: DemoTurnResponse,
         *,
         transcription: str | None = None,
+        timings: dict[str, float] | None = None,
     ) -> DemoVoiceTurnResponse:
+        started = perf_counter()
         speech = await self.audio_adapter.synthesize(turn.agent_message)
+        completed_timings = dict(timings or {})
+        completed_timings["text_to_speech"] = self._elapsed_ms(started)
+        completed_timings["total"] = round(sum(completed_timings.values()), 1)
         return DemoVoiceTurnResponse(
             **turn.model_dump(),
             transcription=transcription,
             audio_base64=base64.b64encode(speech.content).decode("ascii"),
             audio_content_type=speech.media_type,
+            pipeline_timings_ms=completed_timings,
         )
+
+    @staticmethod
+    def _elapsed_ms(started: float) -> float:
+        return round((perf_counter() - started) * 1000, 1)
 
 
 class TextVoiceSimulator:
@@ -136,23 +168,38 @@ class TextVoiceSimulator:
     ) -> None:
         self.orchestrator = orchestrator
         self.turn_model = turn_model
+        self.dialogue_planner = DialoguePlanner()
+        self._job_facts_by_call: dict[str, dict] = {}
 
     async def start(
         self, request: DemoStartRequest | None = None
     ) -> DemoTurnResponse:
         bid = request.verified_competing_bid if request else None
+        version_id = (
+            request.job_spec_version_id
+            if request and request.job_spec_version_id
+            else DEMO_SPEC.version_id
+        )
+        spec = self.orchestrator.inputs.get_confirmed_job_spec(version_id)
+        if spec is None:
+            from .errors import ValidationError
+
+            raise ValidationError(
+                "Caller Lab requires an existing confirmed Estimator specification"
+            )
         policy = CallPolicy(
             verified_competing_bids=(bid,) if bid else (),
             approved_leverage_bid_id=bid.bid_id if bid else None,
         )
         call = self.orchestrator.create_call(
             CallCreateRequest(
-                job_spec_version_id=DEMO_SPEC.version_id,
+                job_spec_version_id=version_id,
                 vendor_id=DEMO_VENDOR.vendor_id,
                 call_type="text_voice_demo",
                 policy=policy,
             )
         )
+        self._job_facts_by_call[call.call_id] = self._conversation_facts(spec.facts)
         await self.orchestrator.start_call(call.call_id)
         self.orchestrator.handle_agent_event(
             call.call_id, AgentEvent(type=AgentEventType.CONNECTION_ESTABLISHED)
@@ -221,6 +268,17 @@ class TextVoiceSimulator:
                 "No problem. I’ve saved the information as an incomplete quote. Thank you.",
             )
 
+        if self.turn_model is None:
+            refreshed = self.orchestrator.get_call_view(call_id)
+            plan = self.dialogue_planner.plan(
+                refreshed, text.strip(), self._job_facts(call_id)
+            )
+            blocker_response = await self._handle_blocker_plan(
+                call_id, plan, evidence
+            )
+            if blocker_response is not None:
+                return blocker_response
+
         status = view.call.status
         if status == CallStatus.DISCLOSURE:
             return self._present_job(call_id)
@@ -255,7 +313,11 @@ class TextVoiceSimulator:
         self, call_id: str, text: str, evidence: EvidenceInput
     ) -> DemoTurnResponse:
         view = self.orchestrator.get_call_view(call_id)
-        decision = await self.turn_model.respond(view, text)
+        decision = await self.turn_model.respond(
+            view,
+            text,
+            self._job_facts(call_id),
+        )
         status = view.call.status
 
         if decision.intent == "decline":
@@ -312,6 +374,20 @@ class TextVoiceSimulator:
 
         self._persist_model_facts(call_id, decision, evidence)
 
+        if decision.planned_action == DialogueAction.CLOSE_CALLBACK_REQUIRED:
+            self.orchestrator.log_quote_term(
+                call_id,
+                QuoteTermInput(
+                    category="callback",
+                    key="missing_information_callback_required",
+                    value=text,
+                    evidence=evidence,
+                ),
+            )
+            return await self._close(
+                call_id, OutcomeType.CALLBACK_REQUIRED, decision.spoken_response
+            )
+
         if status == CallStatus.QUOTE_COLLECTION:
             quote = self.orchestrator.get_call_view(call_id).original_quote
             categories = {term.category for term in quote.terms}
@@ -356,6 +432,58 @@ class TextVoiceSimulator:
             return self._say(call_id, decision.spoken_response)
 
         return self._say(call_id, decision.spoken_response)
+
+    async def _handle_blocker_plan(
+        self,
+        call_id: str,
+        plan: DialoguePlan,
+        evidence: EvidenceInput,
+    ) -> DemoTurnResponse | None:
+        blocker_actions = {
+            DialogueAction.REQUEST_PROVISIONAL_RANGE,
+            DialogueAction.REQUEST_CALLBACK_REQUIREMENTS,
+            DialogueAction.CLOSE_CALLBACK_REQUIRED,
+        }
+        if plan.selected_action not in blocker_actions:
+            return None
+        for requirement in plan.vendor_requirements:
+            self.orchestrator.log_quote_term(
+                call_id,
+                QuoteTermInput(
+                    category="vendor_requirement",
+                    key=requirement.replace(" ", "_"),
+                    value=requirement,
+                    evidence=evidence,
+                ),
+            )
+        if plan.selected_action == DialogueAction.REQUEST_PROVISIONAL_RANGE:
+            return self._say(
+                call_id,
+                "We don’t have those measurements yet. Could you give a provisional "
+                "range for a standard upright?",
+            )
+        if plan.selected_action == DialogueAction.REQUEST_CALLBACK_REQUIREMENTS:
+            return self._say(
+                call_id,
+                "What exact information should we send, and when could you return the quote?",
+            )
+        self.orchestrator.log_quote_term(
+            call_id,
+            QuoteTermInput(
+                category="callback",
+                key="missing_information_callback_required",
+                value={
+                    "requirements": plan.vendor_requirements,
+                    "missing_customer_facts": plan.missing_customer_facts,
+                },
+                evidence=evidence,
+            ),
+        )
+        return await self._close(
+            call_id,
+            OutcomeType.CALLBACK_REQUIRED,
+            "I’ll record this as requiring a callback after those details are provided.",
+        )
 
     def _persist_model_facts(
         self,
@@ -406,12 +534,8 @@ class TextVoiceSimulator:
                 type=AgentEventType.PHASE_COMPLETED, phase=CallStatus.DISCLOSURE
             ),
         )
-        facts = DEMO_SPEC.facts
-        message = (
-            f"The confirmed job is to {str(facts['service']).lower()}, from "
-            f"{facts['origin']} to {facts['destination']}, with {facts['stairs']}. "
-            f"The requested date is {facts['requested_date']}. How do you price this job?"
-        )
+        facts = self._job_facts(call_id)
+        message = self._job_presentation(facts)
         self._append_transcript(call_id, "agent", message)
         self.orchestrator.handle_agent_event(
             call_id,
@@ -635,9 +759,39 @@ class TextVoiceSimulator:
         return DemoTurnResponse(
             agent_message=message,
             call=view,
+            confirmed_job_facts=self._job_facts(call_id),
             terminal=view.outcome is not None,
             model=self.turn_model.model_name if self.turn_model else "rule-based",
         )
+
+    def _job_facts(self, call_id: str) -> dict:
+        return self._job_facts_by_call.get(call_id, DEMO_SPEC.facts)
+
+    @staticmethod
+    def _conversation_facts(facts: dict) -> dict:
+        fields = facts.get("fields")
+        if not isinstance(fields, dict):
+            return dict(facts)
+        return {
+            name: field.get("value", "unknown") if isinstance(field, dict) else field
+            for name, field in fields.items()
+        }
+
+    @staticmethod
+    def _job_presentation(facts: dict) -> str:
+        service = str(facts.get("service", "the confirmed job")).strip()
+        origin = facts.get("origin.location", facts.get("origin"))
+        destination = facts.get("destination.location", facts.get("destination"))
+        requested_date = facts.get("requested_date")
+        details = [service]
+        if origin:
+            details.append(f"from {origin}")
+        if destination:
+            details.append(f"to {destination}")
+        if requested_date:
+            details.append(f"on {requested_date}")
+        summary = ", ".join(str(item) for item in details)
+        return f"The confirmed job is {summary}. How do you price this job?"
 
     def _append_transcript(self, call_id: str, speaker: str, text: str):
         view = self.orchestrator.get_call_view(call_id)

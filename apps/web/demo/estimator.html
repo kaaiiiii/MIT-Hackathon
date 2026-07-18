@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="No-JSON browser test for the Nego Estimator" />
+    <title>Estimator Lab</title>
+    <link rel="stylesheet" href="/demo/estimator.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <a class="brand" href="/demo/estimator.html">
+          <span class="mark">E</span>
+          <span><strong>Estimator Lab</strong><small>No JSON required</small></span>
+        </a>
+        <a class="caller-link" href="/demo/">Open Caller Lab</a>
+      </header>
+
+      <main>
+        <section class="hero">
+          <span class="eyebrow">LOCAL ESTIMATOR TEST</span>
+          <h1>Build a confirmed job spec<br /><em>with two buttons.</em></h1>
+          <p>
+            Edit the sample job, build the evidence-backed draft, review it, and
+            confirm it. The page handles every API request for you.
+          </p>
+        </section>
+
+        <ol class="steps" aria-label="Estimator test progress">
+          <li class="active" data-step="1"><b>1</b><span>Enter job</span></li>
+          <li data-step="2"><b>2</b><span>Review evidence</span></li>
+          <li data-step="3"><b>3</b><span>Confirmed</span></li>
+        </ol>
+
+        <div id="notice" class="notice" role="status">
+          Sample moving details are already filled in. Change anything you want.
+        </div>
+
+        <section class="workspace">
+          <form id="job-form" class="panel">
+            <div class="panel-heading">
+              <div><span class="kicker">JOB DETAILS</span><h2>Moving specification</h2></div>
+              <span class="pill">Moving v1.0</span>
+            </div>
+
+            <div class="form-grid">
+              <label class="wide">What needs to be done?
+                <input id="service" required value="Move one upright piano" />
+              </label>
+              <label>Pickup location
+                <input id="origin-location" required value="Brooklyn, New York" />
+              </label>
+              <label>Delivery location
+                <input id="destination-location" required value="Queens, New York" />
+              </label>
+              <label>Requested date
+                <input id="requested-date" required value="August 1, 2026" />
+              </label>
+              <label>Item type
+                <input id="item-type" required value="upright piano" />
+              </label>
+              <label>Dimensions
+                <input id="item-dimensions" required value="58 by 24 by 48 inches" />
+              </label>
+              <label>Approximate weight
+                <input id="item-weight" required value="500 pounds" />
+              </label>
+              <label>Pickup access
+                <input id="origin-access" required value="first floor" />
+              </label>
+              <label>Delivery access
+                <input id="destination-access" required value="second floor with one flight" />
+              </label>
+            </div>
+
+            <div class="actions">
+              <button id="build-button" class="primary" type="submit">Build evidence-backed draft</button>
+              <button id="reset-button" class="secondary" type="button">Start over</button>
+            </div>
+          </form>
+
+          <aside class="panel review-panel">
+            <div class="panel-heading">
+              <div><span class="kicker">CONFIRMATION REVIEW</span><h2>Captured evidence</h2></div>
+              <span id="draft-status" class="pill muted">Not built</span>
+            </div>
+
+            <div id="review-empty" class="empty">
+              <div class="orbit"></div>
+              <h3>No draft yet</h3>
+              <p>Select <b>Build evidence-backed draft</b> to run the Estimator.</p>
+            </div>
+            <div id="review-content" hidden>
+              <div id="field-list" class="field-list"></div>
+              <div id="missing-fields" class="missing" hidden></div>
+              <button id="confirm-button" class="primary confirm" type="button">
+                Yes, confirm this specification
+              </button>
+            </div>
+
+            <div id="confirmed-result" class="confirmed" hidden>
+              <span class="check">&#10003;</span>
+              <h3>Specification confirmed</h3>
+              <p>The immutable version is ready for the Caller.</p>
+              <dl>
+                <div><dt>Version</dt><dd id="version-id"></dd></div>
+                <div><dt>SHA-256</dt><dd id="canonical-hash"></dd></div>
+              </dl>
+              <a id="continue-caller" class="primary caller-action" href="/demo/">
+                Continue to Caller Lab
+              </a>
+            </div>
+          </aside>
+        </section>
+      </main>
+
+      <footer>
+        This test writes a real confirmed version to your local test database. It does
+        not call a vendor or use an external AI service.
+      </footer>
+    </div>
+    <script type="module" src="/demo/estimator.js"></script>
+  </body>
+</html>

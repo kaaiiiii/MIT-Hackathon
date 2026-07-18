@@ -59,3 +59,18 @@ class InMemoryCallerInputGateway:
     def get_vendor_target(self, vendor_id: str) -> VendorTarget | None:
         return self.vendors.get(vendor_id)
 
+
+class EstimatorAwareCallerInputGateway:
+    """Reads confirmed Estimator specs while leaving vendor ownership upstream."""
+
+    def __init__(self, connection: sqlite3.Connection, upstream) -> None:
+        self.specs = SQLiteCallerInputGateway(connection)
+        self.upstream = upstream
+
+    def get_confirmed_job_spec(self, version_id: str) -> ConfirmedJobSpec | None:
+        return self.specs.get_confirmed_job_spec(
+            version_id
+        ) or self.upstream.get_confirmed_job_spec(version_id)
+
+    def get_vendor_target(self, vendor_id: str) -> VendorTarget | None:
+        return self.upstream.get_vendor_target(vendor_id)

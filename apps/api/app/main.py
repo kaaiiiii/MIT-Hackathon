@@ -23,12 +23,31 @@ from .caller.demo import (
     TextVoiceSimulator,
     build_demo_router,
 )
-from .caller.input_gateway import InMemoryCallerInputGateway
+from .caller.input_gateway import (
+    EstimatorAwareCallerInputGateway,
+    InMemoryCallerInputGateway,
+)
 from .caller.openai_agent import BuyerTurnModel, OpenAIBuyerTurnModel
 from .caller.orchestrator import CallOrchestrator
 from .caller.persistence import SQLiteCallerStore
 from .caller.ports import CallerInputGateway, VoiceSessionAdapter
 from .caller.router import build_caller_router
+from .estimator.adapters import (
+    ElevenLabsAgentsIntakeAdapter,
+    InMemoryCatalogResolver,
+    SimulatedIntakeVoiceAdapter,
+    StructuredJsonDocumentParser,
+)
+from .estimator.errors import (
+    EstimatorConflictError,
+    EstimatorNotFoundError,
+    EstimatorValidationError,
+)
+from .estimator.persistence import SQLiteEstimatorStore
+from .estimator.ports import CatalogResolver, DocumentParser, IntakeVoiceAdapter
+from .estimator.router import build_estimator_router
+from .estimator.service import EstimatorService
+from .estimator.verticals import VerticalConfigLoader
 
 
 def create_app(
@@ -38,13 +57,24 @@ def create_app(
     adapter: VoiceSessionAdapter | None = None,
     buyer_model: BuyerTurnModel | None = None,
     audio_adapter: AudioPipelineAdapter | None = None,
+    estimator_document_parser: DocumentParser | None = None,
+    estimator_catalog_resolver: CatalogResolver | None = None,
+    estimator_configs: VerticalConfigLoader | None = None,
+    estimator_voice_adapter: IntakeVoiceAdapter | None = None,
 ) -> FastAPI:
     store = SQLiteCallerStore(
         database_path or os.getenv("CALLER_DB_PATH", "caller.sqlite3")
     )
+    configured_estimator_voice_adapter = (
+        estimator_voice_adapter or _configured_intake_voice_adapter()
+    )
+    upstream_inputs = inputs or InMemoryCallerInputGateway()
+    composed_inputs = EstimatorAwareCallerInputGateway(
+        store.connection, upstream_inputs
+    )
     orchestrator = CallOrchestrator(
         store=store,
-        inputs=inputs or InMemoryCallerInputGateway(),
+        inputs=composed_inputs,
         adapter=adapter or SimulatedVoiceSessionAdapter(),
     )
 
@@ -53,6 +83,9 @@ def create_app(
         yield
         if audio_adapter is not None:
             await audio_adapter.close()
+        close_voice = getattr(configured_estimator_voice_adapter, "close", None)
+        if close_voice is not None:
+            await close_voice()
         store.close()
 
     app = FastAPI(title="Nego Caller API", version="0.1.0", lifespan=lifespan)
@@ -60,7 +93,22 @@ def create_app(
     app.state.call_orchestrator = orchestrator
     app.include_router(build_caller_router(orchestrator))
 
-    demo_inputs = InMemoryCallerInputGateway([DEMO_SPEC], [DEMO_VENDOR])
+    estimator_store = SQLiteEstimatorStore(store.connection)
+    estimator_service = EstimatorService(
+        store=estimator_store,
+        configs=estimator_configs or VerticalConfigLoader(),
+        document_parser=estimator_document_parser or StructuredJsonDocumentParser(),
+        catalog_resolver=estimator_catalog_resolver or InMemoryCatalogResolver(),
+        voice_adapter=configured_estimator_voice_adapter,
+    )
+    app.state.estimator_store = estimator_store
+    app.state.estimator_service = estimator_service
+    app.include_router(build_estimator_router(estimator_service))
+
+    demo_inputs = EstimatorAwareCallerInputGateway(
+        store.connection,
+        InMemoryCallerInputGateway([DEMO_SPEC], [DEMO_VENDOR]),
+    )
     demo_orchestrator = CallOrchestrator(
         store=store,
         inputs=demo_inputs,
@@ -109,6 +157,33 @@ def create_app(
             content={"error": "external_service_error", "detail": str(exc)},
         )
 
+    @app.exception_handler(EstimatorNotFoundError)
+    async def estimator_not_found(
+        _: Request, exc: EstimatorNotFoundError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"error": "estimator_not_found", "detail": str(exc)},
+        )
+
+    @app.exception_handler(EstimatorConflictError)
+    async def estimator_conflict(
+        _: Request, exc: EstimatorConflictError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={"error": "estimator_conflict", "detail": str(exc)},
+        )
+
+    @app.exception_handler(EstimatorValidationError)
+    async def estimator_invalid(
+        _: Request, exc: EstimatorValidationError
+    ) -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"error": "estimator_validation_error", "detail": str(exc)},
+        )
+
     return app
 
 
@@ -134,6 +209,14 @@ def _configured_audio_adapter() -> AudioPipelineAdapter | None:
         stt_model=os.getenv("ELEVENLABS_STT_MODEL", "scribe_v2"),
         tts_model=os.getenv("ELEVENLABS_TTS_MODEL", "eleven_flash_v2_5"),
     )
+
+
+def _configured_intake_voice_adapter() -> IntakeVoiceAdapter:
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    agent_id = os.getenv("ELEVENLABS_INTAKE_AGENT_ID")
+    if api_key and agent_id:
+        return ElevenLabsAgentsIntakeAdapter(api_key=api_key, agent_id=agent_id)
+    return SimulatedIntakeVoiceAdapter()
 
 
 app = create_app(

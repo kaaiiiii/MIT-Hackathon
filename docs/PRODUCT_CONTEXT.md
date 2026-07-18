@@ -24,6 +24,11 @@ code.
   directly whether it is a robot.
 - Handle interruptions, vague answers, refusals, hard selling, hang-ups, and callback
   promises without fabricating a result.
+- Choose one deterministic conversational objective per turn; GPT controls surface
+  wording, not the complete call strategy.
+- Resolve a genuinely missing customer fact within two buyer turns by seeking a
+  provisional range, capturing callback requirements, or ending with an explicit
+  incomplete outcome.
 - Log important quote facts while the conversation is happening, with vendor transcript
   evidence attached to every stored claim.
 - End every call with a structured outcome: itemized quote, callback commitment,

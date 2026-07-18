@@ -12,7 +12,7 @@ from apps.api.app.caller.audio import SynthesizedAudio
 class FakeBuyerModel:
     model_name = "gpt-5.4-test"
 
-    async def respond(self, view, vendor_text):
+    async def respond(self, view, vendor_text, job_facts=None):
         if view.call.status.value == "disclosure":
             return BuyerTurnDecision(
                 spoken_response="Thanks. The confirmed piano move is from Brooklyn to Queens. What is your pricing?"

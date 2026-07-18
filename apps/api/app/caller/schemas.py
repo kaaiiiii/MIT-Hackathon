@@ -170,6 +170,7 @@ class QuoteTermInput(BaseModel):
         "availability",
         "binding_status",
         "estimated_total",
+        "vendor_requirement",
     ]
     key: str
     value: Any
