@@ -248,6 +248,23 @@ class SQLiteCallerStore:
             )
         return event_id
 
+    def list_dialogue_actions(self, call_id: str) -> list[str]:
+        rows = self.connection.execute(
+            """
+            SELECT payload_json FROM call_events
+            WHERE call_id = ? AND event_type = 'dialogue_action_selected'
+            ORDER BY created_at, rowid
+            """,
+            (call_id,),
+        ).fetchall()
+        actions: list[str] = []
+        for row in rows:
+            payload = json.loads(row["payload_json"])
+            action = payload.get("action")
+            if isinstance(action, str):
+                actions.append(action)
+        return actions
+
     def append_transcript(
         self, call_id: str, event: TranscriptEventInput
     ) -> TranscriptEvent:
@@ -543,4 +560,3 @@ class SQLiteCallerStore:
             validation_warnings=json.loads(row["validation_warnings_json"]),
             created_at=row["created_at"],
         )
-

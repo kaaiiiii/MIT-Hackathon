@@ -1,25 +1,52 @@
 from fastapi.testclient import TestClient
 
 from apps.api.app.main import create_app
+from apps.api.app.caller.dialogue_planner import DialogueAction, DialoguePlanner
 from apps.api.app.caller.openai_agent import (
     BuyerTurnDecision,
     ExtractedLineItem,
     ExtractedTerm,
 )
 from apps.api.app.caller.audio import SynthesizedAudio
+from apps.api.app.caller.schemas import CallView
 
 
 class FakeBuyerModel:
     model_name = "gpt-5.4-test"
 
+    async def opening(self, view, job_facts=None):
+        return (
+            "Hi, I'm an AI assistant calling for a buyer. "
+            "Is now a good time to discuss a quote?"
+        )
+
     async def respond(self, view, vendor_text, job_facts=None):
+        lowered = vendor_text.casefold()
         if view.call.status.value == "disclosure":
+            if "call you back" in lowered:
+                return BuyerTurnDecision(
+                    intent="callback",
+                    planned_action=DialogueAction.CONTINUE,
+                    spoken_response="I'll record the callback commitment. Thank you.",
+                )
+            facts = job_facts or {}
+            origin = facts.get("origin.location") or facts.get("origin") or "Brooklyn"
+            destination = (
+                facts.get("destination.location")
+                or facts.get("destination")
+                or "Queens"
+            )
             return BuyerTurnDecision(
-                spoken_response="Thanks. The confirmed piano move is from Brooklyn to Queens. What is your pricing?"
+                planned_action=DialogueAction.PRESENT_JOB,
+                spoken_response=(
+                    f"The confirmed piano move is from {origin} to {destination}. "
+                    "What would you charge?"
+                ),
             )
         if "all-inclusive" in vendor_text:
             return BuyerTurnDecision(
-                spoken_response="Thanks. Are there any additional fees, and is that total binding?",
+                planned_action=DialogueAction.CLARIFY_FEES,
+                spoken_response="Does that $640 include every fee?",
                 line_items=[
                     ExtractedLineItem(
                         category="labor", description="All-inclusive moving labor", amount=640
@@ -38,7 +65,143 @@ class FakeBuyerModel:
                     ),
                 ],
             )
-        return BuyerTurnDecision(spoken_response="Could you clarify the quote?")
+        if "labor is $350" in lowered and "total is $475" in lowered:
+            return BuyerTurnDecision(
+                planned_action=DialogueAction.CLARIFY_FEES,
+                spoken_response="Does that $475 include every fee?",
+                line_items=[
+                    ExtractedLineItem(
+                        category="labor", description="Moving labor", amount=350
+                    ),
+                    ExtractedLineItem(
+                        category="stairs", description="Stair charge", amount=75
+                    ),
+                ],
+                terms=[
+                    ExtractedTerm(
+                        category="pricing_model",
+                        key="pricing_model",
+                        value_text="flat",
+                    ),
+                    ExtractedTerm(
+                        category="estimated_total", key="total", value_number=475
+                    ),
+                ],
+            )
+        if "flat price" in lowered or "use a flat" in lowered:
+            return BuyerTurnDecision(
+                planned_action=DialogueAction.REQUEST_ITEMIZATION,
+                terms=[
+                    ExtractedTerm(
+                        category="pricing_model",
+                        key="pricing_model",
+                        value_text="flat",
+                    )
+                ],
+                spoken_response="How does that price break down by charge?",
+            )
+        if "not to disclose" in lowered or "keep it as a package" in lowered:
+            return BuyerTurnDecision(
+                response_relation="refused",
+                planned_action=DialogueAction.REQUEST_TOTAL,
+                terms=[
+                    ExtractedTerm(
+                        category="itemization_status",
+                        key="vendor_itemization_refusal",
+                        value_text="refused",
+                    )
+                ],
+                spoken_response="That's okay. What is the bundled total?",
+            )
+        if "bundled total is $500" in lowered:
+            return BuyerTurnDecision(
+                planned_action=DialogueAction.CLARIFY_FEES,
+                terms=[
+                    ExtractedTerm(
+                        category="estimated_total", key="total", value_number=500
+                    )
+                ],
+                spoken_response="Does that $500 include every fee?",
+            )
+        if (
+            "no additional fees" in lowered
+            and "binding" in lowered
+            and "available" in lowered
+        ):
+            terms = [
+                ExtractedTerm(
+                    category="fee",
+                    key="additional_fees",
+                    value_text="No additional fees stated",
+                ),
+                ExtractedTerm(
+                    category="binding_status",
+                    key="binding_status",
+                    value_text="binding",
+                ),
+                ExtractedTerm(
+                    category="availability",
+                    key="vendor_availability",
+                    value_text="Available August 1",
+                ),
+            ]
+            if view.call.policy.approved_leverage_bid_id:
+                bid = view.call.policy.verified_competing_bids[0]
+                return BuyerTurnDecision(
+                    planned_action=DialogueAction.USE_VERIFIED_LEVERAGE,
+                    terms=terms,
+                    spoken_response=(
+                        f"I have a verified competing quote for ${bid.total:,.2f} "
+                        "for the same job. What can you do on the price?"
+                    ),
+                )
+            total = next(
+                (
+                    term.value
+                    for term in reversed(view.original_quote.terms)
+                    if term.category == "estimated_total"
+                ),
+                None,
+            )
+            itemization = (
+                "The vendor declined to itemize. "
+                if any(
+                    term.category == "itemization_status"
+                    for term in view.original_quote.terms
+                )
+                else ""
+            )
+            return BuyerTurnDecision(
+                planned_action=DialogueAction.CONFIRM_SUMMARY,
+                terms=terms,
+                spoken_response=(
+                    f"{itemization}The total is ${float(total):,.2f}, binding and "
+                    "available August 1. Is that accurate?"
+                ),
+            )
+        if "lower the total to $450" in lowered:
+            return BuyerTurnDecision(
+                planned_action=DialogueAction.CONFIRM_SUMMARY,
+                terms=[
+                    ExtractedTerm(
+                        category="estimated_total", key="revised_total", value_number=450
+                    )
+                ],
+                spoken_response=(
+                    "The revised total is $450.00, binding with no extra fees. "
+                    "Is that accurate?"
+                ),
+            )
+        if view.call.status.value == "summary_confirmation":
+            return BuyerTurnDecision(
+                intent="confirm_summary",
+                planned_action=DialogueAction.CONFIRM_SUMMARY,
+                spoken_response="Thank you. I've finalized the evidence-backed quote.",
+            )
+        return BuyerTurnDecision(
+            planned_action=DialogueAction.CONTINUE,
+            spoken_response="Could you clarify the quote?",
+        )
 
 class FakeAudioAdapter:
     def __init__(self):
@@ -68,7 +231,9 @@ def send(client: TestClient, call_id: str, text: str):
 
 
 def test_text_voice_demo_completes_evidence_backed_quote(tmp_path):
-    app = create_app(database_path=str(tmp_path / "demo.db"))
+    app = create_app(
+        database_path=str(tmp_path / "demo.db"), buyer_model=FakeBuyerModel()
+    )
     with TestClient(app) as client:
         started = client.post("/api/v1/demo/sessions")
         assert started.status_code == 200
@@ -104,13 +269,86 @@ def test_text_voice_demo_completes_evidence_backed_quote(tmp_path):
 
 
 def test_text_voice_demo_records_callback(tmp_path):
-    app = create_app(database_path=str(tmp_path / "callback.db"))
+    app = create_app(
+        database_path=str(tmp_path / "callback.db"), buyer_model=FakeBuyerModel()
+    )
     with TestClient(app) as client:
         body = client.post("/api/v1/demo/sessions").json()
         call_id = body["call"]["call"]["call_id"]
         body = send(client, call_id, "I will call you back tomorrow morning.")
         assert body["terminal"] is True
         assert body["call"]["outcome"]["outcome_type"] == "callback_required"
+
+
+def test_itemization_refusal_is_recorded_once_and_advances_the_call(tmp_path):
+    app = create_app(
+        database_path=str(tmp_path / "itemization-refusal.db"),
+        buyer_model=FakeBuyerModel(),
+    )
+    with TestClient(app) as client:
+        body = client.post("/api/v1/demo/sessions").json()
+        call_id = body["call"]["call"]["call_id"]
+        send(client, call_id, "Yes, I can discuss it.")
+
+        body = send(client, call_id, "It is a flat price.")
+        assert "break down" in body["agent_message"].casefold()
+
+        body = send(client, call_id, "I prefer not to disclose the breakdown.")
+        response = body["agent_message"].casefold()
+        assert "total" in response
+        assert "itemize" not in response
+        assert "main cost" not in response
+        assert "cost category" not in response
+        refusal_terms = [
+            term
+            for term in body["call"]["original_quote"]["terms"]
+            if term["category"] == "itemization_status"
+        ]
+        assert len(refusal_terms) == 1
+        assert refusal_terms[0]["value"] == "refused"
+        plan = DialoguePlanner().plan(
+            CallView.model_validate(body["call"]),
+            "I prefer not to disclose the breakdown.",
+            {"service": "Move one upright piano"},
+        )
+        assert plan.selected_action == DialogueAction.REQUEST_TOTAL
+
+        body = send(client, call_id, "The bundled total is $500.")
+        assert body["call"]["call"]["status"] == "quote_clarification"
+        body = send(
+            client,
+            call_id,
+            "There are no additional fees. The total is binding, and we are available August 1.",
+        )
+        assert body["call"]["call"]["status"] == "summary_confirmation"
+        assert "declined to itemize" in body["agent_message"].casefold()
+
+        body = send(client, call_id, "Yes, that is accurate.")
+        assert body["terminal"] is True
+        assert body["call"]["outcome"]["outcome_type"] == "incomplete_quote"
+        assert "Vendor declined to itemize the quote" in (
+            body["call"]["outcome"]["validation_warnings"]
+        )
+
+
+def test_caller_records_itemization_action_only_once(tmp_path):
+    app = create_app(
+        database_path=str(tmp_path / "one-itemization-request.db"),
+        buyer_model=FakeBuyerModel(),
+    )
+    with TestClient(app) as client:
+        body = client.post("/api/v1/demo/sessions").json()
+        call_id = body["call"]["call"]["call_id"]
+        send(client, call_id, "Yes, I can discuss it.")
+
+        body = send(client, call_id, "We use a flat price.")
+        assert "break down" in body["agent_message"].casefold()
+
+        body = send(client, call_id, "We keep it as a package.")
+        reply = body["agent_message"].casefold()
+        assert "total" in reply
+        assert "break down" not in reply
+        assert "itemize" not in reply
 
 
 def test_demo_page_is_served(tmp_path):
@@ -175,7 +413,9 @@ def test_voice_pipeline_transcribes_runs_turn_and_synthesizes(tmp_path):
 
 
 def test_voice_endpoint_explains_missing_elevenlabs_configuration(tmp_path):
-    app = create_app(database_path=str(tmp_path / "no-voice.db"))
+    app = create_app(
+        database_path=str(tmp_path / "no-voice.db"), buyer_model=FakeBuyerModel()
+    )
     with TestClient(app) as client:
         response = client.post("/api/v1/demo/voice/sessions")
         assert response.status_code == 502
@@ -183,7 +423,9 @@ def test_voice_endpoint_explains_missing_elevenlabs_configuration(tmp_path):
 
 
 def test_demo_tracks_both_parties_and_uses_only_verified_leverage(tmp_path):
-    app = create_app(database_path=str(tmp_path / "leverage.db"))
+    app = create_app(
+        database_path=str(tmp_path / "leverage.db"), buyer_model=FakeBuyerModel()
+    )
     verified_bid = {
         "bid_id": "bid_verified_425",
         "source_call_id": "call_previous_vendor",

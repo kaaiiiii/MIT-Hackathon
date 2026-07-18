@@ -293,8 +293,17 @@ class CallOrchestrator:
             call=call,
             transcript=self.store.list_transcript(call_id),
             original_quote=self.store.get_quote_draft(call_id),
+            dialogue_actions=self.store.list_dialogue_actions(call_id),
             outcome=self.store.get_outcome(call_id),
             recording_reference=call.recording_id,
+        )
+
+    def record_dialogue_action(self, call_id: str, action: str) -> None:
+        self._get_mutable_call(call_id)
+        self.store.append_call_event(
+            call_id,
+            "dialogue_action_selected",
+            {"action": action},
         )
 
     def get_confirmed_job_spec(self, call_id: str) -> ConfirmedJobSpec:

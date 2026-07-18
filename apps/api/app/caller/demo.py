@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import re
 from time import perf_counter
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -10,8 +9,8 @@ from fastapi import APIRouter, File, UploadFile
 from pydantic import BaseModel, Field
 
 from .audio import AudioPipelineAdapter
-from .dialogue_planner import DialogueAction, DialoguePlan, DialoguePlanner
-from .errors import ExternalServiceError
+from .dialogue_planner import DialogueAction
+from .errors import ConflictError, ExternalServiceError
 from .orchestrator import CallOrchestrator
 from .openai_agent import BuyerTurnDecision, BuyerTurnModel
 from .schemas import (
@@ -159,16 +158,20 @@ class VoiceTurnPipeline:
 
 
 class TextVoiceSimulator:
-    """Text/voice harness over the real Caller domain, with an optional LLM."""
+    """Text/voice harness over the real Caller domain. Every spoken turn comes from the LLM."""
 
     def __init__(
         self,
         orchestrator: CallOrchestrator,
-        turn_model: BuyerTurnModel | None = None,
+        turn_model: BuyerTurnModel,
     ) -> None:
+        if turn_model is None:
+            raise ValueError(
+                "TextVoiceSimulator requires a BuyerTurnModel — the demo has no "
+                "scripted fallback."
+            )
         self.orchestrator = orchestrator
         self.turn_model = turn_model
-        self.dialogue_planner = DialoguePlanner()
         self._job_facts_by_call: dict[str, dict] = {}
 
     async def start(
@@ -204,19 +207,16 @@ class TextVoiceSimulator:
         self.orchestrator.handle_agent_event(
             call.call_id, AgentEvent(type=AgentEventType.CONNECTION_ESTABLISHED)
         )
-        message = (
-            "Hello. I’m an AI assistant calling on behalf of a buyer to request "
-            "a moving quote. Is now a good time to discuss the job?"
-        )
+        view = self.orchestrator.get_call_view(call.call_id)
+        message = await self.turn_model.opening(view, self._job_facts(call.call_id))
         self._append_transcript(call.call_id, "agent", message)
         return self._response(call.call_id, message)
 
     async def receive(self, call_id: str, text: str) -> DemoTurnResponse:
         view = self.orchestrator.get_call_view(call_id)
         if view.outcome is not None:
-            return self._response(
-                call_id,
-                "This test call has already ended. Start a new call to continue.",
+            raise ConflictError(
+                "This call has already been finalized. Start a new session to continue."
             )
 
         vendor_event = self._append_transcript(call_id, "vendor", text.strip())
@@ -224,90 +224,7 @@ class TextVoiceSimulator:
             transcript_event_id=vendor_event.event_id,
             timestamp_seconds=vendor_event.timestamp_seconds,
         )
-        if self.turn_model is not None:
-            return await self._receive_with_model(call_id, text.strip(), evidence)
-
-        lowered = text.casefold()
-
-        if self._is_decline(lowered):
-            self.orchestrator.log_quote_term(
-                call_id,
-                QuoteTermInput(
-                    category="decline",
-                    key="vendor_decline_reason",
-                    value=text.strip(),
-                    evidence=evidence,
-                ),
-            )
-            return await self._close(
-                call_id,
-                OutcomeType.DECLINED,
-                "Understood. Thank you for your time. I’ve recorded that you declined to quote.",
-            )
-
-        if self._is_callback(lowered):
-            self.orchestrator.log_quote_term(
-                call_id,
-                QuoteTermInput(
-                    category="callback",
-                    key="vendor_callback_commitment",
-                    value=text.strip(),
-                    evidence=evidence,
-                ),
-            )
-            return await self._close(
-                call_id,
-                OutcomeType.CALLBACK_REQUIRED,
-                "Thank you. I’ve recorded the callback commitment and will end this call now.",
-            )
-
-        if self._wants_to_end(lowered):
-            return await self._close(
-                call_id,
-                OutcomeType.INCOMPLETE_QUOTE,
-                "No problem. I’ve saved the information as an incomplete quote. Thank you.",
-            )
-
-        if self.turn_model is None:
-            refreshed = self.orchestrator.get_call_view(call_id)
-            plan = self.dialogue_planner.plan(
-                refreshed, text.strip(), self._job_facts(call_id)
-            )
-            blocker_response = await self._handle_blocker_plan(
-                call_id, plan, evidence
-            )
-            if blocker_response is not None:
-                return blocker_response
-
-        status = view.call.status
-        if status == CallStatus.DISCLOSURE:
-            return self._present_job(call_id)
-
-        if status in {
-            CallStatus.QUOTE_COLLECTION,
-            CallStatus.QUOTE_CLARIFICATION,
-            CallStatus.SUMMARY_CONFIRMATION,
-        }:
-            self._capture_quote_facts(call_id, text, evidence)
-
-        if status == CallStatus.QUOTE_COLLECTION:
-            return self._continue_collection(call_id)
-        if status == CallStatus.QUOTE_CLARIFICATION:
-            return self._continue_clarification(call_id)
-        if status == CallStatus.SUMMARY_CONFIRMATION:
-            if self._is_confirmation(lowered):
-                return await self._close(
-                    call_id,
-                    OutcomeType.COMPLETE_QUOTE,
-                    "Thank you. I’ve finalized the quote with its transcript evidence. "
-                    "This does not accept a contract or commit the buyer.",
-                )
-            return self._say(
-                call_id,
-                "I recorded that correction. Is the revised summary now accurate?",
-            )
-
-        return self._say(call_id, "Could you clarify that for me?")
+        return await self._receive_with_model(call_id, text.strip(), evidence)
 
     async def _receive_with_model(
         self, call_id: str, text: str, evidence: EvidenceInput
@@ -317,6 +234,10 @@ class TextVoiceSimulator:
             view,
             text,
             self._job_facts(call_id),
+        )
+        self.orchestrator.record_dialogue_action(
+            call_id,
+            decision.planned_action.value,
         )
         status = view.call.status
 
@@ -389,13 +310,7 @@ class TextVoiceSimulator:
             )
 
         if status == CallStatus.QUOTE_COLLECTION:
-            quote = self.orchestrator.get_call_view(call_id).original_quote
-            categories = {term.category for term in quote.terms}
-            if (
-                "pricing_model" in categories
-                and quote.line_items
-                and "estimated_total" in categories
-            ):
+            if decision.planned_action == DialogueAction.CLARIFY_FEES:
                 self.orchestrator.handle_agent_event(
                     call_id,
                     AgentEvent(
@@ -406,12 +321,7 @@ class TextVoiceSimulator:
             return self._say(call_id, decision.spoken_response)
 
         if status == CallStatus.QUOTE_CLARIFICATION:
-            quote = self.orchestrator.get_call_view(call_id).original_quote
-            categories = {term.category for term in quote.terms}
-            if {"fee", "binding_status", "availability"}.issubset(categories):
-                leverage = self._pending_approved_leverage(call_id)
-                if leverage is not None:
-                    return self._say(call_id, self._leverage_message(leverage))
+            if decision.planned_action == DialogueAction.CONFIRM_SUMMARY:
                 self.orchestrator.handle_agent_event(
                     call_id,
                     AgentEvent(
@@ -419,71 +329,17 @@ class TextVoiceSimulator:
                         phase=CallStatus.QUOTE_CLARIFICATION,
                     ),
                 )
-                return self._say(call_id, self._summary(call_id))
             return self._say(call_id, decision.spoken_response)
 
         if status == CallStatus.SUMMARY_CONFIRMATION:
             if decision.intent == "confirm_summary":
-                return await self._close(
-                    call_id, OutcomeType.COMPLETE_QUOTE, decision.spoken_response
+                return await self._close_confirmed_summary(
+                    call_id,
+                    decision.spoken_response,
                 )
-            if decision.intent == "correct_summary":
-                return self._say(call_id, self._summary(call_id))
             return self._say(call_id, decision.spoken_response)
 
         return self._say(call_id, decision.spoken_response)
-
-    async def _handle_blocker_plan(
-        self,
-        call_id: str,
-        plan: DialoguePlan,
-        evidence: EvidenceInput,
-    ) -> DemoTurnResponse | None:
-        blocker_actions = {
-            DialogueAction.REQUEST_PROVISIONAL_RANGE,
-            DialogueAction.REQUEST_CALLBACK_REQUIREMENTS,
-            DialogueAction.CLOSE_CALLBACK_REQUIRED,
-        }
-        if plan.selected_action not in blocker_actions:
-            return None
-        for requirement in plan.vendor_requirements:
-            self.orchestrator.log_quote_term(
-                call_id,
-                QuoteTermInput(
-                    category="vendor_requirement",
-                    key=requirement.replace(" ", "_"),
-                    value=requirement,
-                    evidence=evidence,
-                ),
-            )
-        if plan.selected_action == DialogueAction.REQUEST_PROVISIONAL_RANGE:
-            return self._say(
-                call_id,
-                "We don’t have those measurements yet. Could you give a provisional "
-                "range for a standard upright?",
-            )
-        if plan.selected_action == DialogueAction.REQUEST_CALLBACK_REQUIREMENTS:
-            return self._say(
-                call_id,
-                "What exact information should we send, and when could you return the quote?",
-            )
-        self.orchestrator.log_quote_term(
-            call_id,
-            QuoteTermInput(
-                category="callback",
-                key="missing_information_callback_required",
-                value={
-                    "requirements": plan.vendor_requirements,
-                    "missing_customer_facts": plan.missing_customer_facts,
-                },
-                evidence=evidence,
-            ),
-        )
-        return await self._close(
-            call_id,
-            OutcomeType.CALLBACK_REQUIRED,
-            "I’ll record this as requiring a callback after those details are provided.",
-        )
 
     def _persist_model_facts(
         self,
@@ -504,7 +360,9 @@ class TextVoiceSimulator:
                     unit=item.unit,
                     unit_price=item.unit_price,
                     currency=item.currency,
-                    evidence=evidence,
+                    evidence=evidence.model_copy(
+                        update={"source": item.evidence_source}
+                    ),
                 ),
             )
         for term in decision.terms:
@@ -517,231 +375,28 @@ class TextVoiceSimulator:
                 continue
             if term.category == "estimated_total" and isinstance(value, float) and value < 0:
                 continue
+            quote = self.orchestrator.get_call_view(call_id).original_quote
+            if any(
+                existing.category == term.category
+                and existing.value == value
+                and (
+                    term.category in {"pricing_model", "estimated_total"}
+                    or existing.key == term.key
+                )
+                for existing in quote.terms
+            ):
+                continue
             self.orchestrator.log_quote_term(
                 call_id,
                 QuoteTermInput(
                     category=term.category,
                     key=term.key,
                     value=value,
-                    evidence=evidence,
+                    evidence=evidence.model_copy(
+                        update={"source": term.evidence_source}
+                    ),
                 ),
             )
-
-    def _present_job(self, call_id: str) -> DemoTurnResponse:
-        self.orchestrator.handle_agent_event(
-            call_id,
-            AgentEvent(
-                type=AgentEventType.PHASE_COMPLETED, phase=CallStatus.DISCLOSURE
-            ),
-        )
-        facts = self._job_facts(call_id)
-        message = self._job_presentation(facts)
-        self._append_transcript(call_id, "agent", message)
-        self.orchestrator.handle_agent_event(
-            call_id,
-            AgentEvent(
-                type=AgentEventType.PHASE_COMPLETED,
-                phase=CallStatus.JOB_PRESENTATION,
-            ),
-        )
-        return self._response(call_id, message)
-
-    def _continue_collection(self, call_id: str) -> DemoTurnResponse:
-        quote = self.orchestrator.get_call_view(call_id).original_quote
-        categories = {term.category for term in quote.terms}
-        if "pricing_model" not in categories:
-            return self._say(
-                call_id,
-                "Is that a flat price or an hourly estimate, and what does it include?",
-            )
-        if not quote.line_items:
-            return self._say(
-                call_id,
-                "Could you itemize the main labor, travel, material, or equipment costs?",
-            )
-        if "estimated_total" not in categories:
-            return self._say(
-                call_id,
-                "What is the estimated total for the confirmed job, before any unknown extras?",
-            )
-
-        self.orchestrator.handle_agent_event(
-            call_id,
-            AgentEvent(
-                type=AgentEventType.PHASE_COMPLETED,
-                phase=CallStatus.QUOTE_COLLECTION,
-            ),
-        )
-        return self._say(
-            call_id,
-            "Are there any additional fees, minimums, travel charges, taxes, or "
-            "other exclusions? Please also say whether the total is binding.",
-        )
-
-    def _continue_clarification(self, call_id: str) -> DemoTurnResponse:
-        quote = self.orchestrator.get_call_view(call_id).original_quote
-        categories = {term.category for term in quote.terms}
-        if "fee" not in categories:
-            return self._say(
-                call_id,
-                "To make the quote clear, are there any additional or hidden fees?",
-            )
-        if "binding_status" not in categories:
-            return self._say(
-                call_id,
-                "Is the stated total binding, or can it change after inspection?",
-            )
-        if "availability" not in categories:
-            return self._say(
-                call_id,
-                "Are you available for the requested date, August 1, 2026?",
-            )
-
-        leverage = self._pending_approved_leverage(call_id)
-        if leverage is not None:
-            return self._say(call_id, self._leverage_message(leverage))
-
-        self.orchestrator.handle_agent_event(
-            call_id,
-            AgentEvent(
-                type=AgentEventType.PHASE_COMPLETED,
-                phase=CallStatus.QUOTE_CLARIFICATION,
-            ),
-        )
-        return self._say(call_id, self._summary(call_id))
-
-    def _pending_approved_leverage(
-        self, call_id: str
-    ) -> VerifiedCompetingBid | None:
-        view = self.orchestrator.get_call_view(call_id)
-        approved_id = view.call.policy.approved_leverage_bid_id
-        if approved_id is None:
-            return None
-        bid = next(
-            (
-                candidate
-                for candidate in view.call.policy.verified_competing_bids
-                if candidate.bid_id == approved_id
-            ),
-            None,
-        )
-        if bid is None:
-            return None
-        current_total = self._latest_term_value(
-            view.original_quote, "estimated_total"
-        )
-        if not isinstance(current_total, (int, float)) or current_total <= bid.total:
-            return None
-        marker = self._leverage_marker(bid)
-        if any(
-            event.speaker == "agent" and marker in event.text
-            for event in view.transcript
-        ):
-            return None
-        return bid
-
-    @staticmethod
-    def _leverage_marker(bid: VerifiedCompetingBid) -> str:
-        amount = (
-            f"${bid.total:,.2f}"
-            if bid.currency.upper() == "USD"
-            else f"{bid.currency.upper()} {bid.total:,.2f}"
-        )
-        return f"verified competing quote for {amount}"
-
-    def _leverage_message(self, bid: VerifiedCompetingBid) -> str:
-        binding = (
-            "binding " if bid.binding_status == "binding" else ""
-        )
-        return (
-            f"I have a {binding}{self._leverage_marker(bid)} for the same confirmed "
-            "job. Can you match or beat that total, or improve the terms?"
-        )
-
-    def _capture_quote_facts(
-        self, call_id: str, text: str, evidence: EvidenceInput
-    ) -> None:
-        lowered = text.casefold()
-        pricing_model = None
-        if re.search(r"\b(flat|fixed)\b", lowered):
-            pricing_model = "flat"
-        elif re.search(r"\b(hourly|per hour|an hour)\b", lowered):
-            pricing_model = "hourly"
-        if pricing_model:
-            self._log_term(
-                call_id, "pricing_model", "pricing_model", pricing_model, evidence
-            )
-
-        total = self._money_near(text, ("total", "altogether", "all-in", "all in"))
-        if total is not None:
-            self._log_term(call_id, "estimated_total", "total", total, evidence)
-
-        item_patterns = {
-            "labor": ("labor", "crew", "moving"),
-            "travel": ("travel", "mileage", "trip"),
-            "materials": ("material", "blanket", "packing"),
-            "equipment": ("equipment", "piano board", "dolly"),
-            "stairs": ("stairs", "flight"),
-            "tax": ("tax",),
-        }
-        for category, labels in item_patterns.items():
-            amount = self._money_near(text, labels)
-            if amount is not None and amount != total:
-                self.orchestrator.log_quote_line_item(
-                    call_id,
-                    QuoteLineItemInput(
-                        category=category,
-                        description=f"Vendor-stated {category} cost",
-                        amount=amount,
-                        evidence=evidence,
-                    ),
-                )
-
-        if re.search(r"\b(no|without)\b.{0,35}\b(extra|additional|hidden)?\s*fees?\b", lowered):
-            self._log_term(
-                call_id, "fee", "additional_fees", "No additional fees stated", evidence
-            )
-        elif re.search(r"\b(fee|surcharge|minimum)\b", lowered):
-            self._log_term(call_id, "fee", "fee_statement", text.strip(), evidence)
-
-        if re.search(r"\b(non[- ]?binding|not binding|estimate only)\b", lowered):
-            binding = "non-binding"
-        elif re.search(r"\bbinding\b", lowered):
-            binding = "binding"
-        elif re.search(r"\bestimate(?:d)?\b", lowered):
-            binding = "estimate"
-        else:
-            binding = None
-        if binding:
-            self._log_term(
-                call_id, "binding_status", "binding_status", binding, evidence
-            )
-
-        if re.search(
-            r"\b(available|availability|can do|can make|open on|book(?:ed| us)?)\b",
-            lowered,
-        ):
-            self._log_term(
-                call_id, "availability", "vendor_availability", text.strip(), evidence
-            )
-
-    def _summary(self, call_id: str) -> str:
-        quote = self.orchestrator.get_call_view(call_id).original_quote
-        total = self._latest_term_value(quote, "estimated_total")
-        pricing = self._latest_term_value(quote, "pricing_model")
-        binding = self._latest_term_value(quote, "binding_status")
-        availability = self._latest_term_value(quote, "availability")
-        items = ", ".join(
-            f"{item.description}: ${item.amount:,.2f}"
-            for item in quote.line_items
-            if item.amount is not None
-        )
-        return (
-            f"Let me read that back. The pricing model is {pricing}. "
-            f"The itemized costs are {items}. The estimated total is "
-            f"${float(total):,.2f}, with binding status {binding}. "
-            f"You stated your availability as: {availability}. Is that accurate?"
-        )
 
     def _say(self, call_id: str, message: str) -> DemoTurnResponse:
         self._append_transcript(call_id, "agent", message)
@@ -754,6 +409,20 @@ class TextVoiceSimulator:
         await self.orchestrator.finalize_call(call_id, outcome)
         return self._response(call_id, message)
 
+    async def _close_confirmed_summary(
+        self,
+        call_id: str,
+        message: str,
+    ) -> DemoTurnResponse:
+        view = self.orchestrator.get_call_view(call_id)
+        outcome = (
+            OutcomeType.INCOMPLETE_QUOTE
+            if view.call.policy.require_itemization
+            and not view.original_quote.line_items
+            else OutcomeType.COMPLETE_QUOTE
+        )
+        return await self._close(call_id, outcome, message)
+
     def _response(self, call_id: str, message: str) -> DemoTurnResponse:
         view = self.orchestrator.get_call_view(call_id)
         return DemoTurnResponse(
@@ -761,7 +430,7 @@ class TextVoiceSimulator:
             call=view,
             confirmed_job_facts=self._job_facts(call_id),
             terminal=view.outcome is not None,
-            model=self.turn_model.model_name if self.turn_model else "rule-based",
+            model=self.turn_model.model_name,
         )
 
     def _job_facts(self, call_id: str) -> dict:
@@ -776,22 +445,6 @@ class TextVoiceSimulator:
             name: field.get("value", "unknown") if isinstance(field, dict) else field
             for name, field in fields.items()
         }
-
-    @staticmethod
-    def _job_presentation(facts: dict) -> str:
-        service = str(facts.get("service", "the confirmed job")).strip()
-        origin = facts.get("origin.location", facts.get("origin"))
-        destination = facts.get("destination.location", facts.get("destination"))
-        requested_date = facts.get("requested_date")
-        details = [service]
-        if origin:
-            details.append(f"from {origin}")
-        if destination:
-            details.append(f"to {destination}")
-        if requested_date:
-            details.append(f"on {requested_date}")
-        summary = ", ".join(str(item) for item in details)
-        return f"The confirmed job is {summary}. How do you price this job?"
 
     def _append_transcript(self, call_id: str, speaker: str, text: str):
         view = self.orchestrator.get_call_view(call_id)
@@ -811,68 +464,6 @@ class TextVoiceSimulator:
                 ),
             ),
         )
-
-    def _log_term(
-        self,
-        call_id: str,
-        category: str,
-        key: str,
-        value: object,
-        evidence: EvidenceInput,
-    ) -> None:
-        self.orchestrator.log_quote_term(
-            call_id,
-            QuoteTermInput(
-                category=category, key=key, value=value, evidence=evidence
-            ),
-        )
-
-    @staticmethod
-    def _latest_term_value(quote, category: str):
-        values = [term.value for term in quote.terms if term.category == category]
-        return values[-1] if values else "not established"
-
-    @staticmethod
-    def _money_near(text: str, labels: tuple[str, ...]) -> float | None:
-        label_group = "|".join(re.escape(label) for label in labels)
-        after = re.search(
-            rf"(?:{label_group})\b[^$\d]{{0,25}}\$?(\d[\d,]*(?:\.\d{{1,2}})?)",
-            text,
-            re.IGNORECASE,
-        )
-        before = re.search(
-            rf"\$(\d[\d,]*(?:\.\d{{1,2}})?)\s*(?:{label_group})\b",
-            text,
-            re.IGNORECASE,
-        )
-        match = after or before
-        return float(match.group(1).replace(",", "")) if match else None
-
-    @staticmethod
-    def _is_decline(text: str) -> bool:
-        return bool(
-            re.search(
-                r"\b(decline|not interested|cannot quote|can't quote|won't quote|do not quote)\b",
-                text,
-            )
-        )
-
-    @staticmethod
-    def _is_callback(text: str) -> bool:
-        return bool(
-            re.search(
-                r"\b(call back|callback|call you back|call you later|follow up later)\b",
-                text,
-            )
-        )
-
-    @staticmethod
-    def _wants_to_end(text: str) -> bool:
-        return bool(re.search(r"\b(end (the )?call|stop (the )?call|goodbye)\b", text))
-
-    @staticmethod
-    def _is_confirmation(text: str) -> bool:
-        return bool(re.search(r"\b(yes|correct|accurate|confirmed|that's right|that is right)\b", text))
 
 
 def build_demo_router(

@@ -86,7 +86,15 @@ class CallOutcomeValidator:
         if not self._terms(quote, "estimated_total"):
             warnings.append("Estimated total is missing")
         if policy.require_itemization and not quote.line_items:
-            warnings.append("Itemized costs are missing")
+            refused = any(
+                term.category == "itemization_status" and term.value == "refused"
+                for term in quote.terms
+            )
+            warnings.append(
+                "Vendor declined to itemize the quote"
+                if refused
+                else "Itemized costs are missing"
+            )
         if not self._terms(quote, "binding_status"):
             warnings.append("Binding status is missing")
         return warnings
@@ -94,4 +102,3 @@ class CallOutcomeValidator:
     @staticmethod
     def _terms(quote: QuoteDraft, category: str):
         return [term for term in quote.terms if term.category == category]
-

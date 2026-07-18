@@ -55,11 +55,20 @@ class DialoguePlanner:
         view: CallView,
         vendor_text: str,
         job_facts: dict[str, Any],
+        current_turn_line_item_count: int = 0,
+        current_turn_terms: dict[str, list[Any]] | None = None,
     ) -> DialoguePlan:
+        current_turn_terms = current_turn_terms or {}
         known_facts = [f"{key}: {value}" for key, value in job_facts.items()]
         requirements = self._vendor_requirements(vendor_text)
         missing = self._missing_requirements(requirements, job_facts)
-        progress = self._quote_progress(view)
+        progress = self._quote_progress(
+            view,
+            current_turn_line_item_count,
+            current_turn_terms,
+        )
+        itemization_requested = self.itemization_was_requested(view)
+        progress["itemization_requested"] = itemization_requested
         provisional_asked = self._agent_said(
             view,
             r"\b(provisional|rough (?:price |cost )?range|standard upright)\b",
@@ -123,7 +132,16 @@ class DialoguePlanner:
             )
 
         status = view.call.status.value
-        categories = {term.category for term in view.original_quote.terms}
+        categories = {term.category for term in view.original_quote.terms} | set(
+            current_turn_terms
+        )
+        has_line_items = bool(
+            view.original_quote.line_items or current_turn_line_item_count
+        )
+        itemization_refused = any(
+            term.category == "itemization_status" and term.value == "refused"
+            for term in view.original_quote.terms
+        ) or "refused" in current_turn_terms.get("itemization_status", [])
         if status == "disclosure":
             return self._simple(
                 "job_presentation",
@@ -136,15 +154,58 @@ class DialoguePlanner:
                 progress,
             )
         if status == "quote_collection":
+            allowed: list[DialogueAction] = []
+            if "pricing_model" not in categories:
+                allowed.append(DialogueAction.REQUEST_PRICING_MODEL)
+            itemization_attempts = view.dialogue_actions.count(
+                DialogueAction.REQUEST_ITEMIZATION.value
+            )
+            if (
+                not has_line_items
+                and not itemization_refused
+                and itemization_attempts < 2
+            ):
+                allowed.append(DialogueAction.REQUEST_ITEMIZATION)
+            if "estimated_total" not in categories:
+                allowed.append(DialogueAction.REQUEST_TOTAL)
+            else:
+                allowed.append(DialogueAction.CLARIFY_FEES)
+
             if "pricing_model" not in categories:
                 action = DialogueAction.REQUEST_PRICING_MODEL
                 intent = "Ask whether the price is flat or hourly."
-            elif not view.original_quote.line_items:
+            elif (
+                not has_line_items
+                and not itemization_refused
+                and not itemization_requested
+            ):
                 action = DialogueAction.REQUEST_ITEMIZATION
-                intent = "Ask for the main itemized cost first."
-            else:
+                intent = (
+                    "Make the call's single itemization request: ask how the quoted "
+                    "price breaks down into explicitly priced components."
+                )
+            elif "estimated_total" not in categories:
                 action = DialogueAction.REQUEST_TOTAL
-                intent = "Ask for the estimated total."
+                intent = (
+                    "Respect the vendor's itemization refusal without probing again, "
+                    "then ask for the estimated total."
+                    if itemization_refused
+                    else (
+                        "Itemization was already requested. Do not ask for it again; "
+                        "ask for the estimated total."
+                        if itemization_requested
+                        and not has_line_items
+                        else "Ask for the estimated total."
+                    )
+                )
+            else:
+                action = DialogueAction.CLARIFY_FEES
+                intent = (
+                    "Respect the vendor's itemization refusal without probing again, "
+                    "then ask only whether the bundled total has additional fees."
+                    if itemization_refused
+                    else "Ask only whether the stated total has additional fees."
+                )
             return self._simple(
                 "quote_collection",
                 action.value,
@@ -154,8 +215,26 @@ class DialoguePlanner:
                 missing,
                 requirements,
                 progress,
+                allowed,
             )
         if status == "quote_clarification":
+            allowed = []
+            if "fee" not in categories:
+                allowed.append(DialogueAction.CLARIFY_FEES)
+            if "binding_status" not in categories:
+                allowed.append(DialogueAction.CLARIFY_BINDING)
+            if "availability" not in categories:
+                allowed.append(DialogueAction.CLARIFY_AVAILABILITY)
+            if not allowed:
+                if (
+                    view.call.policy.approved_leverage_bid_id
+                    and DialogueAction.USE_VERIFIED_LEVERAGE.value
+                    not in view.dialogue_actions
+                ):
+                    allowed.append(DialogueAction.USE_VERIFIED_LEVERAGE)
+                else:
+                    allowed.append(DialogueAction.CONFIRM_SUMMARY)
+
             if "fee" not in categories:
                 action = DialogueAction.CLARIFY_FEES
                 intent = "Ask only about extra charges or fees."
@@ -165,7 +244,11 @@ class DialoguePlanner:
             elif "availability" not in categories:
                 action = DialogueAction.CLARIFY_AVAILABILITY
                 intent = "Ask whether the vendor is available on the requested date."
-            elif view.call.policy.approved_leverage_bid_id:
+            elif (
+                view.call.policy.approved_leverage_bid_id
+                and DialogueAction.USE_VERIFIED_LEVERAGE.value
+                not in view.dialogue_actions
+            ):
                 action = DialogueAction.USE_VERIFIED_LEVERAGE
                 intent = "Use only the approved verified bid and ask for one concrete improvement."
             else:
@@ -180,6 +263,7 @@ class DialoguePlanner:
                 missing,
                 requirements,
                 progress,
+                allowed,
             )
         if status == "summary_confirmation":
             return self._simple(
@@ -271,17 +355,42 @@ class DialoguePlanner:
         )
 
     @staticmethod
-    def _quote_progress(view: CallView) -> dict[str, Any]:
+    def itemization_was_requested(view: CallView) -> bool:
+        """Use persisted planner state; transcript matching supports older calls."""
+        if DialogueAction.REQUEST_ITEMIZATION.value in view.dialogue_actions:
+            return True
+        return DialoguePlanner._agent_said(
+            view,
+            r"\b(?:itemi[sz]e|itemi[sz]ed|break(?:down|\s+down)|"
+            r"price\s+include|costs?\s+(?:are\s+)?included|"
+            r"priced?\s+(?:components?|parts?)\s+(?:are\s+)?included|"
+            r"charges?\s+(?:make\s+up|are\s+in)|"
+            r"labor.{0,40}(?:travel|material|equipment)|"
+            r"(?:travel|material|equipment).{0,40}labor)\b",
+        )
+
+    @staticmethod
+    def _quote_progress(
+        view: CallView,
+        current_turn_line_item_count: int = 0,
+        current_turn_terms: dict[str, list[Any]] | None = None,
+    ) -> dict[str, Any]:
+        current_turn_terms = current_turn_terms or {}
+
         def values(category: str) -> list[Any]:
-            return [
+            stored = [
                 term.value
                 for term in view.original_quote.terms
                 if term.category == category
             ]
+            return stored + current_turn_terms.get(category, [])
 
         return {
             "pricing_model": (values("pricing_model") or [None])[-1],
-            "line_item_count": len(view.original_quote.line_items),
+            "itemization_status": (values("itemization_status") or [None])[-1],
+            "line_item_count": (
+                len(view.original_quote.line_items) + current_turn_line_item_count
+            ),
             "fees": values("fee"),
             "estimated_total": (values("estimated_total") or [None])[-1],
             "binding_status": (values("binding_status") or [None])[-1],
@@ -298,6 +407,7 @@ class DialoguePlanner:
         missing: list[str],
         requirements: list[str],
         progress: dict[str, Any],
+        allowed: list[DialogueAction] | None = None,
     ) -> DialoguePlan:
         return self._plan(
             state,
@@ -306,7 +416,7 @@ class DialoguePlanner:
             missing,
             requirements,
             progress,
-            [action],
+            allowed or [action],
             action,
             intent,
             0,

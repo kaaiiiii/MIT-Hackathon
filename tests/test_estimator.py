@@ -3,11 +3,13 @@ import json
 from fastapi.testclient import TestClient
 
 from apps.api.app.main import create_app
+from apps.api.app.caller.dialogue_planner import DialogueAction
 from apps.api.app.caller.input_gateway import (
     InMemoryCallerInputGateway,
     SQLiteCallerInputGateway,
 )
 from apps.api.app.caller.orchestrator import specification_sha256
+from apps.api.app.caller.openai_agent import BuyerTurnDecision
 from apps.api.app.caller.schemas import VendorTarget
 from apps.api.app.estimator.adapters import InMemoryCatalogResolver
 from apps.api.app.estimator.schemas import CatalogCandidate
@@ -24,6 +26,23 @@ REQUIRED_MOVING_FIELDS = {
     "origin.access": "first floor",
     "destination.access": "second floor with one flight",
 }
+
+
+class _HandoffBuyerModel:
+    model_name = "handoff-test-model"
+
+    async def opening(self, view, job_facts=None):
+        return "Hi, I'm an AI assistant. Is now a good time to discuss a quote?"
+
+    async def respond(self, view, vendor_text, job_facts=None):
+        facts = job_facts or {}
+        return BuyerTurnDecision(
+            planned_action=DialogueAction.PRESENT_JOB,
+            spoken_response=(
+                f"The move is from {facts['origin.location']} to "
+                f"{facts['destination.location']}. What would you charge?"
+            ),
+        )
 
 
 def _document(fields: dict[str, str], confidence: float = 0.99) -> bytes:
@@ -366,7 +385,10 @@ def test_estimator_lab_is_served_without_swagger_or_manual_json(tmp_path):
 
 
 def test_confirmed_estimator_spec_can_start_caller_lab_session(tmp_path):
-    app = create_app(database_path=str(tmp_path / "lab-handoff.db"))
+    app = create_app(
+        database_path=str(tmp_path / "lab-handoff.db"),
+        buyer_model=_HandoffBuyerModel(),
+    )
     with TestClient(app) as client:
         session_id = _create_session(client)["session_id"]
         uploaded = client.post(

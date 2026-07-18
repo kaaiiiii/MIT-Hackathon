@@ -171,6 +171,7 @@ class QuoteTermInput(BaseModel):
         "binding_status",
         "estimated_total",
         "vendor_requirement",
+        "itemization_status",
     ]
     key: str
     value: Any
@@ -252,5 +253,6 @@ class CallView(BaseModel):
     call: CallRecord
     transcript: list[TranscriptEvent]
     original_quote: QuoteDraft
+    dialogue_actions: list[str] = Field(default_factory=list)
     outcome: StructuredCallOutcome | None = None
     recording_reference: str | None = None

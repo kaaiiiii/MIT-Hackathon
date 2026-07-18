@@ -7,7 +7,7 @@ from typing import Literal, Protocol
 from openai import AsyncOpenAI, OpenAIError
 from pydantic import BaseModel, Field
 
-from .dialogue_planner import DialogueAction, DialoguePlan, DialoguePlanner
+from .dialogue_planner import DialogueAction, DialoguePlanner
 from .errors import ExternalServiceError
 from .schemas import CallView
 from .spoken_response import (
@@ -29,6 +29,7 @@ TermCategory = Literal[
     "binding_status",
     "estimated_total",
     "vendor_requirement",
+    "itemization_status",
 ]
 
 
@@ -40,6 +41,9 @@ class ExtractedLineItem(BaseModel):
     unit: str | None = None
     unit_price: float | None = None
     currency: str = "USD"
+    evidence_source: Literal["vendor_statement", "vendor_confirmation"] = (
+        "vendor_statement"
+    )
 
 
 class ExtractedTerm(BaseModel):
@@ -47,10 +51,20 @@ class ExtractedTerm(BaseModel):
     key: str = Field(min_length=1)
     value_text: str | None = None
     value_number: float | None = None
+    evidence_source: Literal["vendor_statement", "vendor_confirmation"] = (
+        "vendor_statement"
+    )
 
 
-class BuyerTurnDecision(BaseModel):
-    spoken_response: str = Field(min_length=1, max_length=900)
+class VendorTurnAnalysis(BaseModel):
+    understanding: str = Field(default="", max_length=600)
+    response_relation: Literal[
+        "answered",
+        "partially_answered",
+        "refused",
+        "off_topic",
+        "unclear",
+    ] = "answered"
     intent: Literal[
         "continue",
         "callback",
@@ -61,11 +75,25 @@ class BuyerTurnDecision(BaseModel):
     ] = "continue"
     line_items: list[ExtractedLineItem] = Field(default_factory=list)
     terms: list[ExtractedTerm] = Field(default_factory=list)
-    planned_action: DialogueAction = DialogueAction.CONTINUE
+
+
+class SpokenTurn(BaseModel):
+    spoken_response: str = Field(min_length=1, max_length=900)
+
+
+class BuyerTurnDecision(VendorTurnAnalysis):
+    spoken_response: str = Field(min_length=1, max_length=900)
+    planned_action: DialogueAction
 
 
 class BuyerTurnModel(Protocol):
     model_name: str
+
+    async def opening(
+        self,
+        view: CallView,
+        job_facts: dict | None = None,
+    ) -> str: ...
 
     async def respond(
         self,
@@ -101,6 +129,10 @@ class OpenAIBuyerTurnModel:
             f"{self.communication_policy.strip()}\n\n"
             f"{self.surface_instructions.strip()}\n"
         )
+        self.adaptive_instructions = (
+            f"{self.communication_policy.strip()}\n\n"
+            f"{(prompt_directory / 'adaptive_turn_agent.txt').read_text(encoding='utf-8').strip()}\n"
+        )
 
     async def respond(
         self,
@@ -109,7 +141,10 @@ class OpenAIBuyerTurnModel:
         job_facts: dict | None = None,
     ) -> BuyerTurnDecision:
         active_job_facts = job_facts if job_facts is not None else self.job_facts
-        plan = self.planner.plan(view, vendor_text, active_job_facts)
+        baseline = self.planner.plan(view, vendor_text, active_job_facts)
+        candidate_actions = self._candidate_actions(
+            view, baseline.allowed_next_actions
+        )
         payload = {
             "current_call_state": view.call.status.value,
             "confirmed_job_spec": self._job_spec(view, active_job_facts),
@@ -118,62 +153,185 @@ class OpenAIBuyerTurnModel:
             "full_transcript_event_count": len(view.transcript),
             "approved_verified_leverage": self._approved_leverage(view),
             "latest_vendor_statement": vendor_text,
-            "dialogue_plan": plan.model_dump(mode="json"),
+            "dialogue_actions": view.dialogue_actions,
+            "candidate_next_actions": [
+                action.value for action in candidate_actions
+            ],
+            "workflow_context": baseline.model_dump(mode="json"),
         }
         try:
             decision = await self._request_decision(payload)
-            previous = previous_buyer_turn(view.transcript)
-            recent = recent_buyer_turns(view.transcript)
-            check = validate_spoken_response(
-                decision.spoken_response,
-                previous,
-                recent,
-            )
-            if not check.valid:
-                retry_payload = {
-                    **payload,
-                    "response_validation_failure": check.reason,
-                    "retry_instruction": (
-                        "Rewrite only the spoken response. Keep the exact selected "
-                        "action, intent, and extracted facts. Use at most 45 words "
-                        "and no more than one question mark."
-                    ),
-                }
-                retry = await self._request_decision(retry_payload)
-                retry_check = validate_spoken_response(
-                    retry.spoken_response,
-                    previous,
-                    recent,
+            for attempt in range(2):
+                failure, allowed = self._validate_decision(
+                    decision,
+                    view,
+                    vendor_text,
+                    active_job_facts,
                 )
-                spoken = (
-                    retry.spoken_response
-                    if retry_check.valid
-                    else self._fallback_spoken(plan)
+                if failure is None:
+                    return decision
+                if attempt == 1:
+                    raise ExternalServiceError(
+                        "OpenAI failed buyer-turn validation twice: " + failure
+                    )
+                decision = await self._request_decision(
+                    {
+                        **payload,
+                        "decision_validation_failure": failure,
+                        "allowed_next_actions_after_analysis": [
+                            action.value for action in allowed
+                        ],
+                        "retry_instruction": (
+                            "Reconsider the latest turn and return a complete corrected "
+                            "BuyerTurnDecision. Preserve only facts supported by the "
+                            "conversation and choose one allowed next action."
+                        ),
+                    }
                 )
-                decision = decision.model_copy(update={"spoken_response": spoken})
         except OpenAIError as exc:
             raise ExternalServiceError(
                 "OpenAI could not generate the buyer response. Check the API key, "
                 "project access, billing, and model permissions."
             ) from exc
 
-        return decision.model_copy(update={"planned_action": plan.selected_action})
+        raise ExternalServiceError("OpenAI returned no valid buyer turn")
+
+    @staticmethod
+    def _candidate_actions(
+        view: CallView,
+        baseline: list[DialogueAction],
+    ) -> list[DialogueAction]:
+        """Expose phase goals broadly; post-extraction validation enforces readiness."""
+        blocker_actions = {
+            DialogueAction.REQUEST_PROVISIONAL_RANGE,
+            DialogueAction.REQUEST_CALLBACK_REQUIREMENTS,
+            DialogueAction.CLOSE_CALLBACK_REQUIRED,
+        }
+        if any(action in blocker_actions for action in baseline):
+            return baseline
+        status = view.call.status.value
+        if status == "quote_collection":
+            return [
+                DialogueAction.REQUEST_PRICING_MODEL,
+                DialogueAction.REQUEST_ITEMIZATION,
+                DialogueAction.REQUEST_TOTAL,
+                DialogueAction.CLARIFY_FEES,
+            ]
+        if status == "quote_clarification":
+            actions = [
+                DialogueAction.CLARIFY_FEES,
+                DialogueAction.CLARIFY_BINDING,
+                DialogueAction.CLARIFY_AVAILABILITY,
+                DialogueAction.CONFIRM_SUMMARY,
+            ]
+            if view.call.policy.approved_leverage_bid_id:
+                actions.insert(-1, DialogueAction.USE_VERIFIED_LEVERAGE)
+            return actions
+        return baseline
+
+    async def opening(
+        self,
+        view: CallView,
+        job_facts: dict | None = None,
+    ) -> str:
+        active_job_facts = job_facts if job_facts is not None else self.job_facts
+        payload = {
+            "current_call_state": view.call.status.value,
+            "confirmed_job_spec": self._job_spec(view, active_job_facts),
+            "quote_so_far": view.original_quote.model_dump(mode="json"),
+            "conversation_history": self._conversation_history(view),
+            "full_transcript_event_count": len(view.transcript),
+            "approved_verified_leverage": self._approved_leverage(view),
+            "dialogue_actions": view.dialogue_actions,
+            "opening_turn": True,
+            "spoken_intent": (
+                "Open the call: disclose that you are an AI assistant calling on "
+                "behalf of a buyer to request a quote, then ask whether now is a "
+                "good time to discuss the confirmed job."
+            ),
+        }
+        try:
+            spoken_turn = await self._request_spoken(payload)
+        except OpenAIError as exc:
+            raise ExternalServiceError(
+                "OpenAI could not generate the opening buyer response. Check the "
+                "API key, project access, billing, and model permissions."
+            ) from exc
+        return spoken_turn.spoken_response
 
     async def _request_decision(self, payload: dict) -> BuyerTurnDecision:
         response = await self.client.responses.parse(
             model=self.model_name,
-            reasoning={"effort": "none"},
+            reasoning={"effort": "low"},
             text={"verbosity": "low"},
-            instructions=self.instructions,
+            instructions=self.adaptive_instructions,
             input=json.dumps(payload, ensure_ascii=False),
             text_format=BuyerTurnDecision,
-            max_output_tokens=900,
+            max_output_tokens=1200,
             store=False,
         )
         decision = response.output_parsed
         if decision is None:
-            raise ExternalServiceError("OpenAI returned no structured buyer response")
+            raise ExternalServiceError("OpenAI returned no buyer-turn decision")
         return decision
+
+    def _validate_decision(
+        self,
+        decision: BuyerTurnDecision,
+        view: CallView,
+        vendor_text: str,
+        job_facts: dict,
+    ) -> tuple[str | None, list[DialogueAction]]:
+        current_terms: dict[str, list[object]] = {}
+        for term in decision.terms:
+            value = (
+                term.value_number
+                if term.value_number is not None
+                else term.value_text
+            )
+            if value is not None:
+                current_terms.setdefault(term.category, []).append(value)
+        plan = self.planner.plan(
+            view,
+            vendor_text,
+            job_facts,
+            current_turn_line_item_count=len(decision.line_items),
+            current_turn_terms=current_terms,
+        )
+        allowed = plan.allowed_next_actions
+        if decision.planned_action not in allowed:
+            return (
+                f"Action {decision.planned_action.value!r} is not currently allowed; "
+                f"choose one of {[action.value for action in allowed]}",
+                allowed,
+            )
+
+        check = validate_spoken_response(
+            decision.spoken_response,
+            previous_buyer_turn(view.transcript),
+            recent_buyer_turns(view.transcript),
+            allow_question_repair=decision.response_relation
+            in {"off_topic", "unclear"},
+        )
+        if not check.valid:
+            return check.reason or "Spoken response failed validation", allowed
+        return None, allowed
+
+    async def _request_spoken(self, payload: dict) -> SpokenTurn:
+        response = await self.client.responses.parse(
+            model=self.model_name,
+            reasoning={"effort": "low"},
+            text={"verbosity": "low"},
+            instructions=self.instructions,
+            input=json.dumps(payload, ensure_ascii=False),
+            text_format=SpokenTurn,
+            max_output_tokens=300,
+            store=False,
+        )
+        spoken = response.output_parsed
+        if spoken is None:
+            raise ExternalServiceError("OpenAI returned no spoken buyer response")
+        return spoken
 
     @staticmethod
     def _job_spec(view: CallView, job_facts: dict) -> dict:
@@ -213,29 +371,3 @@ class OpenAIBuyerTurnModel:
             if bid.bid_id == approved_id:
                 return bid.model_dump(mode="json")
         return None
-
-    @staticmethod
-    def _fallback_spoken(plan: DialoguePlan) -> str:
-        responses = {
-            DialogueAction.PRESENT_JOB: "Could you give me a rough price range for the confirmed piano move?",
-            DialogueAction.REQUEST_PRICING_MODEL: "Would that be a flat price or an hourly rate?",
-            DialogueAction.REQUEST_ITEMIZATION: "What is the main cost in that estimate?",
-            DialogueAction.REQUEST_TOTAL: "What total should the customer expect?",
-            DialogueAction.CLARIFY_FEES: "What extra charges should the customer expect?",
-            DialogueAction.CLARIFY_BINDING: "Is that total binding?",
-            DialogueAction.CLARIFY_AVAILABILITY: "Are you available on August 1?",
-            DialogueAction.REQUEST_PROVISIONAL_RANGE: (
-                "We don't have those measurements yet. Could you give a provisional "
-                "range for a standard upright?"
-            ),
-            DialogueAction.REQUEST_CALLBACK_REQUIREMENTS: (
-                "What exact information should we send, and when could you return the quote?"
-            ),
-            DialogueAction.CLOSE_CALLBACK_REQUIRED: (
-                "I'll record this as requiring a callback after those details are provided."
-            ),
-            DialogueAction.USE_VERIFIED_LEVERAGE: "Can you match the verified competing bid?",
-            DialogueAction.CONFIRM_SUMMARY: "Is that summary accurate?",
-            DialogueAction.CONTINUE: "What is the next step for getting a quote?",
-        }
-        return responses[plan.selected_action]

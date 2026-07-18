@@ -66,6 +66,10 @@ confidence, and voice-turn/document-region/catalog reference before the call sta
   latest evidenced facts.
 - Missing customer information follows a two-turn policy: request a provisional range,
   then capture exact callback requirements, then finalize a callback-required outcome.
+- Explicit itemization refusals become transcript-backed `itemization_status=refused`.
+  That closes the itemization objective, prevents paraphrased re-asking, and advances
+  the Caller to total and fee clarification. A policy that requires itemization then
+  finalizes the result as an incomplete quote rather than pressuring the vendor.
 - Spoken responses are checked for length, multiple questions, robotic openers, formal
   template phrases, and repetition. One wording-only GPT retry is allowed.
 - Competing-bid leverage must be supplied as a verified, evidence-referenced policy

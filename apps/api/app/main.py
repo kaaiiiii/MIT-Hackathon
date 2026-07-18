@@ -115,12 +115,13 @@ def create_app(
         adapter=SimulatedVoiceSessionAdapter(),
     )
     app.state.demo_orchestrator = demo_orchestrator
-    app.include_router(
-        build_demo_router(
-            TextVoiceSimulator(demo_orchestrator, buyer_model),
-            audio_adapter,
+    if buyer_model is not None:
+        app.include_router(
+            build_demo_router(
+                TextVoiceSimulator(demo_orchestrator, buyer_model),
+                audio_adapter,
+            )
         )
-    )
     app.state.demo_buyer_model = buyer_model
     app.state.demo_audio_adapter = audio_adapter
 

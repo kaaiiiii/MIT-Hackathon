@@ -15,6 +15,7 @@ def validate_spoken_response(
     response: str,
     previous_buyer_turn: str | None = None,
     recent_buyer_turns: list[str] | None = None,
+    allow_question_repair: bool = False,
 ) -> SpokenResponseCheck:
     response = response.strip()
     if len(response.split()) > 45:
@@ -50,7 +51,9 @@ def validate_spoken_response(
     history = recent_buyer_turns or []
     if previous_buyer_turn and previous_buyer_turn not in history:
         history = [*history, previous_buyer_turn]
-    if any(_repeats_question(response, prior) for prior in history):
+    if not allow_question_repair and any(
+        _repeats_question(response, prior) for prior in history
+    ):
         return SpokenResponseCheck(False, "Response repeats a recent buyer question.")
 
     return SpokenResponseCheck(True)
