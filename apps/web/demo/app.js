@@ -41,6 +41,8 @@ let jobEvidenceCount = 0;
 let quoteEvidenceCount = 0;
 let vadContext = null;
 let vadTimer = null;
+let conversationActive = false;
+let discardRecording = false;
 
 const stateOrder = [
   "disclosure",
@@ -100,12 +102,25 @@ function appendToSourceBuffer(sourceBuffer, chunk) {
 // <audio src> can abort mid-utterance. Consume it with fetch instead: feed
 // MediaSource as chunks arrive when the browser supports MP3 MSE, otherwise
 // download fully and play the blob.
+// Resolves when the element finishes playing (or immediately if playback
+// cannot start), so conversation mode knows when to reopen the microphone.
+function playbackFinished(audioEl, playPromise) {
+  return new Promise((resolve) => {
+    audioEl.addEventListener("ended", resolve, { once: true });
+    audioEl.addEventListener("error", resolve, { once: true });
+    (playPromise ?? audioEl.play()).catch(() => {
+      reportAutoplayBlocked();
+      resolve();
+    });
+  });
+}
+
 async function playVoice(data) {
   if (!data.audio_url) {
     if (!data.audio_base64) return;
     lastAudioEl = new Audio(`data:${data.audio_content_type};base64,${data.audio_base64}`);
     replayButton.disabled = false;
-    lastAudioEl.play().catch(reportAutoplayBlocked);
+    await playbackFinished(lastAudioEl);
     return;
   }
 
@@ -124,7 +139,7 @@ async function playVoice(data) {
       }
       rememberForReplay(chunks);
       lastAudioEl = new Audio(lastReplayUrl);
-      lastAudioEl.play().catch(reportAutoplayBlocked);
+      await playbackFinished(lastAudioEl);
       return;
     }
 
@@ -135,16 +150,17 @@ async function playVoice(data) {
       mediaSource.addEventListener("sourceopen", resolve, { once: true });
     });
     const sourceBuffer = mediaSource.addSourceBuffer("audio/mpeg");
-    lastAudioEl.play().catch(reportAutoplayBlocked);
+    const done = playbackFinished(lastAudioEl);
     for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
+      const { done: finished, value } = await reader.read();
+      if (finished) break;
       chunks.push(value);
       await appendToSourceBuffer(sourceBuffer, value);
     }
     if (mediaSource.readyState === "open") mediaSource.endOfStream();
     URL.revokeObjectURL(mediaUrl);
     rememberForReplay(chunks);
+    await done;
   } catch (error) {
     recordingStatus.textContent = `Buyer voice failed: ${error.message}`;
   }
@@ -176,6 +192,7 @@ async function api(path, options = {}) {
 
 startButton.addEventListener("click", async () => {
   if (isBusy) return;
+  if (conversationActive) endConversation("Starting a new call…");
   setBusy(true);
   try {
     const total = Number(competingBidTotal.value);
@@ -199,8 +216,11 @@ startButton.addEventListener("click", async () => {
     callId = data.call.call.call_id;
     startButton.querySelector("span").textContent = "Start new call";
     render(data);
-    playVoice(data);
+    setBusy(false);
     input.focus();
+    await playVoice(data);
+    // The greeting has been spoken — go straight into hands-free conversation.
+    await startConversation();
   } catch (error) {
     showError(error.message);
   } finally {
@@ -212,6 +232,12 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const text = input.value.trim();
   if (!text || !callId || isBusy) return;
+  if (mediaRecorder?.state === "recording") {
+    // A typed turn replaces whatever the open microphone captured so far.
+    discardRecording = true;
+    stopSilenceWatch();
+    mediaRecorder.stop();
+  }
   setBusy(true);
   input.value = "";
   try {
@@ -220,7 +246,13 @@ form.addEventListener("submit", async (event) => {
       body: JSON.stringify({ text }),
     });
     render(data);
-    playVoice(data);
+    setBusy(false);
+    await playVoice(data);
+    if (data.terminal) {
+      if (conversationActive) endConversation("Call complete.");
+    } else if (conversationActive) {
+      listenForVendorTurn();
+    }
   } catch (error) {
     input.value = text;
     showError(error.message);
@@ -275,46 +307,74 @@ function stopSilenceWatch() {
 function stopRecording(statusMessage) {
   stopSilenceWatch();
   if (mediaRecorder?.state === "recording") mediaRecorder.stop();
-  recordButton.classList.remove("recording");
-  recordLabel.textContent = "Record vendor reply";
   recordingStatus.textContent = statusMessage;
 }
 
-recordButton.addEventListener("click", async () => {
-  if (!callId || isBusy) return;
-  if (mediaRecorder?.state === "recording") {
-    stopRecording("Processing speech with ElevenLabs Scribe v2…");
-    return;
-  }
-
+// Conversation mode: the microphone stays open across turns. A pause sends the
+// utterance, the buyer agent answers, and listening resumes when it finishes
+// speaking — no clicking between turns.
+async function startConversation() {
+  if (conversationActive || !callId) return;
   try {
-    microphoneStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const preferred = "audio/webm;codecs=opus";
-    const options = MediaRecorder.isTypeSupported(preferred) ? { mimeType: preferred } : {};
-    mediaRecorder = new MediaRecorder(microphoneStream, options);
-    audioChunks = [];
-    mediaRecorder.addEventListener("dataavailable", (event) => {
-      if (event.data.size) audioChunks.push(event.data);
+    microphoneStream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true },
     });
-    mediaRecorder.addEventListener("stop", submitRecording, { once: true });
-    mediaRecorder.start(250);
-    startSilenceWatch(microphoneStream);
-    recordButton.classList.add("recording");
-    recordLabel.textContent = "Stop and send";
-    recordingStatus.textContent = "Recording… pause briefly to auto-send, or press stop.";
   } catch (error) {
     showError(`Microphone unavailable: ${error.message}`);
+    return;
   }
+  conversationActive = true;
+  recordButton.classList.add("recording");
+  recordLabel.textContent = "End conversation";
+  listenForVendorTurn();
+}
+
+function endConversation(statusMessage) {
+  conversationActive = false;
+  discardRecording = mediaRecorder?.state === "recording";
+  stopSilenceWatch();
+  if (mediaRecorder?.state === "recording") mediaRecorder.stop();
+  microphoneStream?.getTracks().forEach((track) => track.stop());
+  microphoneStream = null;
+  recordButton.classList.remove("recording");
+  recordLabel.textContent = "Start conversation";
+  recordingStatus.textContent = statusMessage;
+}
+
+function listenForVendorTurn() {
+  if (!conversationActive || !microphoneStream) return;
+  const preferred = "audio/webm;codecs=opus";
+  const options = MediaRecorder.isTypeSupported(preferred) ? { mimeType: preferred } : {};
+  mediaRecorder = new MediaRecorder(microphoneStream, options);
+  audioChunks = [];
+  mediaRecorder.addEventListener("dataavailable", (event) => {
+    if (event.data.size) audioChunks.push(event.data);
+  });
+  mediaRecorder.addEventListener("stop", submitRecording, { once: true });
+  mediaRecorder.start(250);
+  startSilenceWatch(microphoneStream);
+  recordingStatus.textContent = "Listening… speak as the vendor; a pause sends it.";
+}
+
+recordButton.addEventListener("click", () => {
+  if (!callId) return;
+  if (conversationActive) {
+    endConversation("Conversation ended. Press Start conversation to resume.");
+    return;
+  }
+  startConversation();
 });
 
 async function submitRecording() {
   const mimeType = mediaRecorder?.mimeType || "audio/webm";
   const blob = new Blob(audioChunks, { type: mimeType });
-  microphoneStream?.getTracks().forEach((track) => track.stop());
-  microphoneStream = null;
   mediaRecorder = null;
-  if (!blob.size) {
-    showError("The microphone recording was empty.");
+  if (discardRecording) {
+    discardRecording = false;
+    return;
+  }
+  if (!blob.size || blob.size < 2000) {
+    if (conversationActive) listenForVendorTurn();
     return;
   }
 
@@ -327,13 +387,19 @@ async function submitRecording() {
       body: formData,
     });
     render(data);
-    playVoice(data);
     const latency = data.pipeline_timings_ms?.total;
-    recordingStatus.textContent = `ElevenLabs heard: “${data.transcription}”${latency ? ` · ${latency} ms` : ""}`;
+    recordingStatus.textContent = `Heard: “${data.transcription}”${latency ? ` · ${latency} ms` : ""} — buyer agent is speaking…`;
+    setBusy(false);
+    await playVoice(data);
+    if (data.terminal) {
+      endConversation("Call complete — the outcome is on the evidence board.");
+      return;
+    }
+    if (conversationActive) listenForVendorTurn();
   } catch (error) {
     showError(error.message);
-  } finally {
     setBusy(false);
+    if (conversationActive) listenForVendorTurn();
   }
 }
 
@@ -582,7 +648,8 @@ function setBusy(busy) {
   if (callId) {
     input.disabled = busy;
     sendButton.disabled = busy;
-    recordButton.disabled = busy;
+    // Hanging up must stay possible while the agent is thinking or speaking.
+    recordButton.disabled = busy && !conversationActive;
   }
   sendButton.textContent = busy ? "…" : "Send";
 }
