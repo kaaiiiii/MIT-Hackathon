@@ -328,7 +328,7 @@ table.ledger .strike {
 }
 
 .shell-nav__inner {
-  max-width: var(--measure-report);
+  max-width: var(--measure-shell);
   margin: 0 auto;
   padding: var(--s4) var(--s5);
   display: flex;
@@ -405,7 +405,7 @@ table.ledger .strike {
 }
 
 .shell-nav__note {
-  max-width: var(--measure-report);
+  max-width: var(--measure-shell);
   margin: 0 auto;
   padding: 0 var(--s5) var(--s2);
   text-align: right;

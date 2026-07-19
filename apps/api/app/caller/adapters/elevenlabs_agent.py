@@ -55,6 +55,37 @@ class ElevenLabsCallerAgentAdapter:
             )
         return signed_url
 
+    async def fetch_conversation(self, conversation_id: str) -> dict:
+        """Retrieve one completed conversation without exposing the API key."""
+        try:
+            response = await self.client.get(
+                f"https://api.elevenlabs.io/v1/convai/conversations/{conversation_id}",
+                headers={"xi-api-key": self.api_key},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            raise ExternalServiceError(
+                "ElevenLabs could not retrieve the Caller conversation "
+                f"(HTTP {exc.response.status_code}: {self._safe_error_detail(exc.response)})"
+            ) from exc
+        except httpx.RequestError as exc:
+            raise ExternalServiceError(
+                "ElevenLabs could not reach the conversation service "
+                f"({exc.__class__.__name__}: {exc})"
+            ) from exc
+        except ValueError as exc:
+            raise ExternalServiceError(
+                "ElevenLabs returned an invalid Caller conversation"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ExternalServiceError("ElevenLabs returned an invalid Caller conversation")
+        if payload.get("agent_id") != self.agent_id:
+            raise ExternalServiceError(
+                "The ElevenLabs conversation does not belong to the configured Caller Agent"
+            )
+        return payload
+
     @staticmethod
     def _safe_error_detail(response: httpx.Response) -> str:
         try:

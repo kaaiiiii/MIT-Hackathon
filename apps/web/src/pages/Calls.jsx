@@ -6,7 +6,7 @@ import './calls.css';
 // Step 2 of the demo: simulate the vendor calls for a confirmed specification.
 // The working call console (state machine, evidence board, voice loop) lives at
 // /demo/; this tab hosts it against the chosen spec so the whole flow stays in
-// the app: Estimator -> Calls -> Report.
+// the app: Estimator -> Calls.
 export default function Calls() {
   const [params, setParams] = useSearchParams();
   const [specs, setSpecs] = useState([]);
@@ -66,11 +66,6 @@ export default function Calls() {
               </option>
             ))}
           </select>
-          {active && (
-            <Link className="mono calls-page__report" to={`/report?spec=${encodeURIComponent(active)}`}>
-              Continue to the report →
-            </Link>
-          )}
         </div>
       </header>
       {error && <p className="calls-page__error">{error}</p>}

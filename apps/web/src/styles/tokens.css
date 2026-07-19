@@ -61,11 +61,9 @@
   --hairline: 1px solid var(--line-0);
   --rule: 1px solid var(--line-1);
   --measure-home: 56rem;
-  --measure-report: 76rem;
+  --measure-shell: 76rem;
 
   /* ---- motion ---------------------------------------------------------- */
   --t-fast: 120ms ease;
-  --t-flip: 480ms cubic-bezier(0.2, 0.7, 0, 1);
-  --count-ms: 700; /* unitless: read by rAF count-up */
   --type-ms: 16; /* unitless: typewriter per-character */
 }

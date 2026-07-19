@@ -1,23 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Navigate, NavLink, Route, Routes, useLocation, useSearchParams } from 'react-router-dom';
-import { ReportProvider } from './lib/ReportContext';
+import { Navigate, NavLink, Route, Routes } from 'react-router-dom';
 import Home from './pages/Home';
 import Calls from './pages/Calls';
-import Report from './pages/Report';
-import CallDetail from './pages/CallDetail';
-
-// The Streamlit app addressed a seller with /report?call=<id>; those links
-// must keep working. /call/:id is the canonical route now.
-function ReportOrRedirect() {
-  const [params] = useSearchParams();
-  const call = params.get('call');
-  if (call) return <Navigate to={`/call/${call}`} replace />;
-  return <Report />;
-}
 
 function Nav() {
-  const { pathname } = useLocation();
-  const onReport = pathname.startsWith('/report') || pathname.startsWith('/call');
   const [authNote, setAuthNote] = useState(false);
   const noteTimer = useRef(null);
   useEffect(() => () => clearTimeout(noteTimer.current), []);
@@ -40,9 +26,6 @@ function Nav() {
           <NavLink to="/calls" className={({ isActive }) => (isActive ? 'active' : '')}>
             Calls
           </NavLink>
-          <NavLink to="/report" className={onReport ? 'active' : ''}>
-            Report
-          </NavLink>
           <button type="button" className="shell-nav__auth" onClick={comingSoon}>
             Log in
           </button>
@@ -62,15 +45,13 @@ function Nav() {
 
 export default function App() {
   return (
-    <ReportProvider>
+    <>
       <Nav />
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/calls" element={<Calls />} />
-        <Route path="/report" element={<ReportOrRedirect />} />
-        <Route path="/call/:id" element={<CallDetail />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-    </ReportProvider>
+    </>
   );
 }

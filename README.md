@@ -237,13 +237,18 @@ JSON** exports the immutable object that the Caller reads by `version_id`.
 Without this value, the intake voice endpoint uses the simulated adapter for automated
 tests; the browser clearly reports that live ElevenLabs Agents is not configured.
 
-The keys stay server-side and are never sent to the browser. `OPENAI_MODEL` selects
-the silent Caller adviser, while `OPENAI_RESEARCH_MODEL` selects the model used for
-web-grounded research. The legacy STT/TTS compatibility harness uses
+The keys stay server-side and are never sent to the browser. `OPENAI_CALLER_MODEL`
+selects the latency-sensitive silent Caller adviser, while `OPENAI_RESEARCH_MODEL`
+selects the model used for web-grounded research. The Caller defaults to
+`gpt-5.4-mini` with no reasoning effort and an eight-second timeout; these settings
+are independent of the heavier research pass. The legacy STT/TTS compatibility
+harness uses
 `scribe_v2`, and `eleven_flash_v2_5`:
 
 ```powershell
-$env:OPENAI_MODEL = "gpt-5.4"
+$env:OPENAI_CALLER_MODEL = "gpt-5.4-mini"
+$env:OPENAI_CALLER_REASONING_EFFORT = "none"
+$env:OPENAI_CALLER_TIMEOUT_SECONDS = "8"
 $env:OPENAI_RESEARCH_MODEL = "gpt-5.6-terra"
 $env:ELEVENLABS_STT_MODEL = "scribe_v2"
 $env:ELEVENLABS_TTS_MODEL = "eleven_flash_v2_5"

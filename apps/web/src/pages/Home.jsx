@@ -1,11 +1,9 @@
-import { Link } from 'react-router-dom';
 import EstimatorIntake from '../components/EstimatorIntake';
 import './home.css';
 
 const DOCKET = [
   ['09:12', 'Intake — you talk once.', 'One short call about your move. That is your only job.'],
   ['13:40', 'Calls to vendors placed — we work the phones.', 'Unnecessary fees are challenged on the record; real quotes get played against each other.'],
-  ['18:20', 'Report filed — you pick.', 'One report: the best deal, the proof, and exactly what to do next.'],
 ];
 
 export default function Home() {
@@ -34,20 +32,6 @@ export default function Home() {
           </div>
         ))}
       </section>
-
-      <div className="home__bridge">
-        <p className="home__bridge-copy">
-          <strong>Already ran a negotiation?</strong>
-          <span className="mono muted">
-            {' '}
-            A real sample run: 2-bedroom move, Rock Hill SC to Charlotte NC, six companies
-            called, $605 negotiated off the winner.
-          </span>
-        </p>
-        <Link to="/report" className="btn">
-          See a finished report →
-        </Link>
-      </div>
 
       <footer className="home__trust micro muted">
         Discloses it's an AI · Every number cites a recording · Too-cheap quotes get

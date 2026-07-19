@@ -47,6 +47,10 @@ class CallerAgentUtteranceRequest(BaseModel):
     advice_id: str | None = None
 
 
+class CallerConversationImportRequest(BaseModel):
+    conversation_id: str = Field(pattern=r"^conv_[A-Za-z0-9]+$")
+
+
 class CallerAgentResponse(BaseModel):
     call: CallView
     confirmed_job_facts: dict = Field(default_factory=dict)
@@ -165,6 +169,31 @@ class ElevenLabsCallerLoop:
             provider_connection_url=signed_url,
             provider_context=provider_context,
         )
+
+    async def fetch_conversation(self, conversation_id: str) -> dict[str, Any]:
+        payload = await self.connection_adapter.fetch_conversation(conversation_id)
+        turns = []
+        for index, turn in enumerate(payload.get("transcript") or []):
+            if not isinstance(turn, dict):
+                continue
+            role = turn.get("role")
+            message = turn.get("message")
+            if role not in {"user", "agent"} or not isinstance(message, str):
+                continue
+            turns.append(
+                {
+                    "turn_index": index,
+                    "role": role,
+                    "message": message,
+                    "time_in_call_secs": turn.get("time_in_call_secs", 0),
+                }
+            )
+        return {
+            "conversation_id": conversation_id,
+            "agent_id": payload.get("agent_id"),
+            "status": payload.get("status"),
+            "transcript": turns,
+        }
 
     async def advise(
         self, call_id: str, request: CallerAgentAdviceRequest
@@ -451,6 +480,12 @@ def build_elevenlabs_caller_router(loop: ElevenLabsCallerLoop) -> APIRouter:
         request: CallerAgentStartRequest | None = None,
     ) -> CallerAgentResponse:
         return await loop.start(request)
+
+    @router.post("/conversations/import")
+    async def import_conversation(
+        request: CallerConversationImportRequest,
+    ) -> dict[str, Any]:
+        return await loop.fetch_conversation(request.conversation_id)
 
     @router.post(
         "/sessions/{call_id}/advise", response_model=CallerAgentResponse

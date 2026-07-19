@@ -13,6 +13,21 @@ class FakeCallerAgentAdapter:
     async def create_connection(self):
         return "wss://api.elevenlabs.test/caller?signed=true"
 
+    async def fetch_conversation(self, conversation_id):
+        return {
+            "conversation_id": conversation_id,
+            "agent_id": "agent_test",
+            "status": "done",
+            "transcript": [
+                {
+                    "role": "user",
+                    "message": "I can do six hundred, but not lower than that.",
+                    "time_in_call_secs": 221,
+                },
+                {"role": "system", "message": "internal event"},
+            ],
+        }
+
     async def close(self):
         pass
 
@@ -108,6 +123,31 @@ def advise(client, call_id, vendor_text):
         f"/api/v1/demo/agent/sessions/{call_id}/advise",
         {"vendor_text": vendor_text, "conversation_history": {"entries": []}},
     )
+
+
+def test_caller_conversation_import_returns_sanitized_transcript(tmp_path):
+    app = create_app(
+        database_path=str(tmp_path / "caller-agent.db"),
+        buyer_model=FakeAdvisor(),
+        caller_agent_adapter=FakeCallerAgentAdapter(),
+    )
+    with TestClient(app) as client:
+        imported = post(
+            client,
+            "/api/v1/demo/agent/conversations/import",
+            {"conversation_id": "conv_seed123"},
+        )
+
+    assert imported["conversation_id"] == "conv_seed123"
+    assert imported["status"] == "done"
+    assert imported["transcript"] == [
+        {
+            "turn_index": 0,
+            "role": "user",
+            "message": "I can do six hundred, but not lower than that.",
+            "time_in_call_secs": 221,
+        }
+    ]
 
 
 def test_elevenlabs_owns_speech_while_gpt_advises_and_backend_stores_evidence(tmp_path):

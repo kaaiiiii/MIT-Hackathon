@@ -56,6 +56,9 @@ Parameters:
 
 The result contains `advice_id`, `next_action`, `conversational_objective`,
 `response_guidance`, `quote_so_far`, and any recommended terminal outcome.
+The browser always returns a JSON object. If GPT exceeds the live timeout or is
+temporarily unavailable, it returns bounded fallback guidance so ElevenLabs can
+continue the conversation instead of failing the blocking tool call.
 
 ### `record_caller_utterance`
 
@@ -70,6 +73,14 @@ Parameters:
 The backend rejects missing, unknown, reused, or cross-call advice IDs. This makes
 each recorded buyer response traceable to one GPT advisory decision without letting
 GPT control the spoken wording.
+
+For low-latency calls, configure the API process with:
+
+```powershell
+$env:OPENAI_CALLER_MODEL = "gpt-5.4-mini"
+$env:OPENAI_CALLER_REASONING_EFFORT = "none"
+$env:OPENAI_CALLER_TIMEOUT_SECONDS = "8"
+```
 
 ## Local test
 

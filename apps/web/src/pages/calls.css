@@ -40,10 +40,6 @@
   color: inherit;
 }
 
-.calls-page__report {
-  align-self: flex-end;
-}
-
 .calls-page__error {
   color: #c22f2f;
   font-weight: 600;

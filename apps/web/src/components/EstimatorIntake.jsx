@@ -9,7 +9,6 @@ import {
   importElevenLabsConversation,
   startVoiceIntake,
 } from '../lib/api';
-import { useReport } from '../lib/ReportContext';
 
 const REQUIRED_ELEVENLABS_VARIABLES = [
   'disclosure',
@@ -84,7 +83,6 @@ export default function EstimatorIntake() {
   const widgetHost = useRef(null);
   const conversationStartedAt = useRef(null);
   const researchStarted = useRef(false);
-  const { loadBackendReport } = useReport();
 
   useEffect(() => {
     if (!resumeSessionId || session || confirmed) return;
@@ -312,7 +310,6 @@ export default function EstimatorIntake() {
       const result = await confirmIntake(session.session_id);
       setConfirmed(result);
       localStorage.setItem('nego_job_spec_version_id', result.version_id);
-      await loadBackendReport(result.version_id);
       setStatus('Confirmed. Every vendor call will use this exact specification.');
     } catch (err) {
       setError(err.message);
@@ -387,17 +384,11 @@ export default function EstimatorIntake() {
             <a className="btn btn--small" href="/demo/samples.html" target="_blank" rel="noopener">
               Play the agency part (optional) →
             </a>
-            <Link className="btn btn--small" to={`/report?spec=${encodeURIComponent(confirmed.version_id)}`}>
-              View live report
-            </Link>
             <button type="button" className="btn btn--small" onClick={downloadConfirmedJson}>
               Download Caller context JSON
             </button>
           </div>
         </div>
-      )}
-      {!session && (
-        <Link to="/call/call_p1" className="mono call-slot__link">Read a sample call →</Link>
       )}
     </section>
   );

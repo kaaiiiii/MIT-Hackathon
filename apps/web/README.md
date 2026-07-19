@@ -1,7 +1,7 @@
 # The Negotiator frontend
 
 React, Vite, and React Router frontend integrated with the FastAPI Estimator,
-research, Caller, and reporting-context APIs.
+research, and Caller APIs.
 
 ## Connected workflow
 
@@ -19,12 +19,6 @@ research, Caller, and reporting-context APIs.
 5. Caller Lab opens a signed connection to the dedicated ElevenLabs Caller Agent.
    The Agent owns the conversation and uses two blocking client tools for silent GPT
    decision advice and exact buyer-utterance recording.
-6. Report loads persisted calls and research for that exact version. **Refresh calls**
-   reloads evidence; **Prepare final report** requires terminal calls and runs the
-   fresh pre-report research gate.
-
-The bundled sample report and replay remain available when no backend version has
-been confirmed.
 
 ## Development
 
@@ -55,8 +49,7 @@ cd ../..
 uvicorn apps.api.app.main:app --reload
 ```
 
-FastAPI detects `apps/web/dist`, serves the SPA at `http://127.0.0.1:8000/`, and
-falls back to `index.html` for `/report` and `/call/:id` browser refreshes.
+FastAPI detects `apps/web/dist` and serves the SPA at `http://127.0.0.1:8000/`.
 
 Checks:
 

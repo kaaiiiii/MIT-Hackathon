@@ -312,8 +312,12 @@ def _configured_buyer_model() -> BuyerTurnModel | None:
         return None
     return OpenAIBuyerTurnModel(
         api_key=api_key,
-        model=os.getenv("OPENAI_MODEL", "gpt-5.2"),
+        model=os.getenv("OPENAI_CALLER_MODEL", "gpt-5.4-mini"),
         job_facts=DEMO_SPEC.facts,
+        adviser_reasoning_effort=os.getenv(
+            "OPENAI_CALLER_REASONING_EFFORT", "none"
+        ),
+        api_timeout_seconds=float(os.getenv("OPENAI_CALLER_TIMEOUT_SECONDS", "8")),
     )
 
 

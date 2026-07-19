@@ -48,12 +48,3 @@ export const confirmIntake = (sessionId) =>
     method: 'POST',
     body: JSON.stringify({ approved: true, confirmed_by: 'negotiator_web_user' }),
   });
-
-export const getReportContext = (versionId) =>
-  api(`/api/v1/research/specs/${encodeURIComponent(versionId)}/report-context`);
-
-export const prepareReport = (versionId) =>
-  api(`/api/v1/reports/${encodeURIComponent(versionId)}/prepare`, {
-    method: 'POST',
-    body: JSON.stringify({}),
-  });

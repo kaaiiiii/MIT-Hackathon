@@ -31,6 +31,8 @@ let jobEvidenceCount = 0;
 let quoteEvidenceCount = 0;
 let ending = false;
 
+const ADVISER_TIMEOUT_MS = 8000;
+
 const stateOrder = [
   "disclosure",
   "job_presentation",
@@ -62,6 +64,35 @@ async function api(path, options = {}) {
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.detail ?? `Request failed (${response.status})`);
   return body;
+}
+
+async function apiWithTimeout(path, options = {}, timeoutMs = ADVISER_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await api(path, { ...options, signal: controller.signal });
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+function fallbackAdvice(error, vendorText = "") {
+  const reason = error?.name === "AbortError" ? "adviser_timeout" : "adviser_unavailable";
+  return {
+    tool_status: "fallback",
+    error_code: reason,
+    advice_id: null,
+    understanding: vendorText
+      ? `The vendor said: ${vendorText.slice(0, 240)}`
+      : "No vendor text was supplied to the adviser.",
+    response_relation: "Respond directly to the vendor's latest statement without repeating prior questions.",
+    next_action: "continue_naturally",
+    conversational_objective: "Acknowledge the vendor briefly and advance one useful step.",
+    response_guidance: "Use one short, natural sentence and at most one question. Do not invent facts, prices, or leverage.",
+    should_end_call: false,
+    recommended_outcome: null,
+    quote_so_far: latestResponse?.call?.original_quote ?? {},
+  };
 }
 
 startButton.addEventListener("click", async () => {
@@ -119,49 +150,73 @@ function mountAgent(connection) {
   widget.setAttribute("dynamic-variables", JSON.stringify(connection.provider_context));
 
   widget.addEventListener("elevenlabs-convai:call", (event) => {
+    if (!event.detail?.config) {
+      showError("ElevenLabs did not provide a client-tool configuration object.");
+      return;
+    }
     event.detail.config.clientTools = {
       advise_caller_turn: async (parameters) => {
-        const vendorText = String(parameters.vendor_text ?? "").trim();
-        if (!vendorText) throw new Error("advise_caller_turn requires vendor_text");
-        const data = await api(`/api/v1/demo/agent/sessions/${callId}/advise`, {
-          method: "POST",
-          body: JSON.stringify({
-            vendor_text: vendorText,
-            conversation_history: parameters.conversation_history ?? null,
-          }),
-        });
-        render(data);
-        const advice = data.advice;
-        return {
-          advice_id: data.advice_id,
-          understanding: advice.understanding,
-          response_relation: advice.response_relation,
-          next_action: advice.planned_action,
-          conversational_objective: advice.conversational_objective,
-          response_guidance: advice.response_guidance,
-          should_end_call: Boolean(data.recommended_outcome),
-          recommended_outcome: data.recommended_outcome,
-          quote_so_far: data.call.original_quote,
-        };
+        const vendorText = String(parameters?.vendor_text ?? "").trim();
+        if (!vendorText || !callId) return fallbackAdvice(null, vendorText);
+        try {
+          const data = await apiWithTimeout(`/api/v1/demo/agent/sessions/${callId}/advise`, {
+            method: "POST",
+            body: JSON.stringify({
+              vendor_text: vendorText,
+              conversation_history: parameters?.conversation_history ?? null,
+            }),
+          });
+          render(data);
+          const advice = data.advice ?? {};
+          return {
+            tool_status: "ok",
+            advice_id: data.advice_id ?? null,
+            understanding: advice.understanding ?? vendorText,
+            response_relation: advice.response_relation ?? "Address the latest vendor statement.",
+            next_action: advice.planned_action ?? "continue_naturally",
+            conversational_objective: advice.conversational_objective ?? "Advance the quote conversation by one step.",
+            response_guidance: advice.response_guidance ?? "Use one concise, natural response.",
+            should_end_call: Boolean(data.recommended_outcome),
+            recommended_outcome: data.recommended_outcome ?? null,
+            quote_so_far: data.call?.original_quote ?? {},
+          };
+        } catch (error) {
+          console.warn("advise_caller_turn fell back", error);
+          recordingStatus.textContent = "GPT advice was slow or unavailable; ElevenLabs continued with safe fallback guidance.";
+          return fallbackAdvice(error, vendorText);
+        }
       },
       record_caller_utterance: async (parameters) => {
-        const spokenText = String(parameters.spoken_text ?? "").trim();
-        if (!spokenText) throw new Error("record_caller_utterance requires spoken_text");
-        const data = await api(`/api/v1/demo/agent/sessions/${callId}/utterances`, {
-          method: "POST",
-          body: JSON.stringify({
-            spoken_text: spokenText,
-            advice_id: parameters.advice_id ?? null,
-          }),
-        });
-        render(data);
-        return {
-          saved: true,
-          terminal: data.terminal,
-          final_outcome: data.call.outcome?.outcome_type ?? null,
-        };
+        const spokenText = String(parameters?.spoken_text ?? "").trim();
+        if (!spokenText || !callId) {
+          return { saved: false, terminal: false, final_outcome: null, error_code: "missing_utterance" };
+        }
+        try {
+          const data = await apiWithTimeout(`/api/v1/demo/agent/sessions/${callId}/utterances`, {
+            method: "POST",
+            body: JSON.stringify({
+              spoken_text: spokenText,
+              advice_id: parameters?.advice_id ?? null,
+            }),
+          });
+          render(data);
+          return {
+            saved: true,
+            terminal: data.terminal,
+            final_outcome: data.call.outcome?.outcome_type ?? null,
+          };
+        } catch (error) {
+          console.warn("record_caller_utterance could not persist", error);
+          return {
+            saved: false,
+            terminal: false,
+            final_outcome: null,
+            error_code: error?.name === "AbortError" ? "storage_timeout" : "storage_unavailable",
+          };
+        }
       },
     };
+    recordingStatus.textContent = "Caller tools connected. ElevenLabs can request GPT advice and evidence logging.";
   });
 
   widget.addEventListener("conversationStarted", () => {

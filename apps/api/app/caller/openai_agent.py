@@ -133,10 +133,17 @@ class OpenAIBuyerTurnModel:
         model: str = "gpt-5.2",
         job_facts: dict | None = None,
         client: AsyncOpenAI | None = None,
+        adviser_reasoning_effort: str = "none",
+        api_timeout_seconds: float = 8.0,
     ) -> None:
         self.model_name = model
+        self.adviser_reasoning_effort = adviser_reasoning_effort
         self.job_facts = job_facts or {}
-        self.client = client or AsyncOpenAI(api_key=api_key)
+        self.client = client or AsyncOpenAI(
+            api_key=api_key,
+            timeout=api_timeout_seconds,
+            max_retries=0,
+        )
         prompt_directory = Path(__file__).with_name("prompts")
         self.communication_policy = (
             prompt_directory / "negotiation_policy.txt"
@@ -187,7 +194,7 @@ class OpenAIBuyerTurnModel:
         try:
             response = await self.client.responses.parse(
                 model=self.model_name,
-                reasoning={"effort": "medium"},
+                reasoning={"effort": self.adviser_reasoning_effort},
                 text={"verbosity": "low"},
                 instructions=self.adviser_instructions,
                 input=json.dumps(payload, ensure_ascii=False),
