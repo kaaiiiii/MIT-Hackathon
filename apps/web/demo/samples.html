@@ -111,12 +111,28 @@
             <button id="synthesize" class="primary-button" type="button" disabled>
               <span>Generate the remaining quotes synthetically</span>
             </button>
+            <button id="run-analysis" class="primary-button" type="button" disabled>
+              <span>Run the quote analysis</span>
+            </button>
             <button id="new-session" class="icon-button" type="button">
               Start over
             </button>
           </div>
 
           <div id="sample-grid" class="sample-grid"></div>
+
+          <section id="analysis-panel" class="hidden">
+            <div class="sample-progress" style="margin-top:1.6rem">
+              <span>Quote analysis</span>
+              <span id="analysis-model" class="count-badge"></span>
+            </div>
+            <div class="sample-card">
+              <p id="analysis-summary"></p>
+              <strong id="analysis-lowest"></strong>
+              <ul id="analysis-observations" style="margin:0; padding-left:1.2rem; line-height:1.5"></ul>
+            </div>
+            <div id="analysis-quotes" class="sample-grid" style="margin-top:0.9rem"></div>
+          </section>
         </section>
       </main>
 

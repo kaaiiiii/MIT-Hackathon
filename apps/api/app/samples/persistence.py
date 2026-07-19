@@ -22,6 +22,12 @@ CREATE TABLE IF NOT EXISTS sample_recordings (
     media_type TEXT,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS sample_analyses (
+    session_id TEXT PRIMARY KEY REFERENCES sample_sessions(session_id),
+    analysis_json TEXT NOT NULL,
+    model TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -91,4 +97,21 @@ class SQLiteSamplesStore:
         return self.connection.execute(
             "SELECT * FROM sample_recordings WHERE session_id = ? AND recording_id = ?",
             (session_id, recording_id),
+        ).fetchone()
+
+    def save_analysis(
+        self, session_id: str, analysis_json: str, model: str
+    ) -> None:
+        self.connection.execute(
+            "INSERT INTO sample_analyses (session_id, analysis_json, model, "
+            "created_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(session_id) DO UPDATE SET analysis_json = excluded."
+            "analysis_json, model = excluded.model, created_at = excluded.created_at",
+            (session_id, analysis_json, model, datetime.now(UTC).isoformat()),
+        )
+        self.connection.commit()
+
+    def get_analysis(self, session_id: str) -> sqlite3.Row | None:
+        return self.connection.execute(
+            "SELECT * FROM sample_analyses WHERE session_id = ?", (session_id,)
         ).fetchone()

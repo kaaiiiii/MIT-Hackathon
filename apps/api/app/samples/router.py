@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from ..caller.audio import AudioPipelineAdapter
 from ..caller.errors import ExternalServiceError, NotFoundError, ValidationError
-from .generator import SampleQuoteGenerator
+from .generator import SampleAnalysis, SampleQuoteGenerator
 from .persistence import SQLiteSamplesStore
 
 
@@ -45,6 +45,7 @@ class SampleSessionView(BaseModel):
     remaining_slots: int
     max_website_quotes: int = MAX_WEBSITE_QUOTES
     recordings: list[SampleRecordingView]
+    analysis: SampleAnalysis | None = None
 
 
 class SampleCallsService:
@@ -89,6 +90,7 @@ class SampleCallsService:
         ]
         recorded = sum(1 for r in recordings if r.source == "recorded")
         synthetic = len(recordings) - recorded
+        stored_analysis = self.store.get_analysis(session_id)
         return SampleSessionView(
             session_id=session_id,
             target_quotes=session["target_quotes"],
@@ -96,6 +98,11 @@ class SampleCallsService:
             synthetic_count=synthetic,
             remaining_slots=max(0, session["target_quotes"] - len(recordings)),
             recordings=recordings,
+            analysis=(
+                SampleAnalysis.model_validate_json(stored_analysis["analysis_json"])
+                if stored_analysis is not None
+                else None
+            ),
         )
 
     async def add_recording(
@@ -181,6 +188,35 @@ class SampleCallsService:
             )
         return self.view(session_id)
 
+    async def analyze(self, session_id: str) -> SampleSessionView:
+        view = self.view(session_id)
+        if not view.recordings:
+            raise ValidationError(
+                "Collect at least one sample quote before running the analysis."
+            )
+        if self.generator is None:
+            raise ExternalServiceError(
+                "Quote analysis needs OpenAI. Set OPENAI_API_KEY, then restart "
+                "the API."
+            )
+        quotes = [
+            {
+                "agency_name": r.agency_name or f"Sample {index + 1}",
+                "source": r.source,
+                "stated_total": r.quote_total,
+                "currency": r.currency,
+                "transcript": r.transcript,
+            }
+            for index, r in enumerate(view.recordings)
+        ]
+        analysis = await self.generator.analyze(quotes=quotes)
+        self.store.save_analysis(
+            session_id,
+            analysis.model_dump_json(),
+            getattr(self.generator, "model_name", "unknown"),
+        )
+        return self.view(session_id)
+
     def audio_file(self, session_id: str, recording_id: str) -> tuple[Path, str]:
         row = self.store.get_recording(session_id, recording_id)
         if row is None or row["audio_path"] is None:
@@ -249,6 +285,12 @@ def build_samples_router(service: SampleCallsService) -> APIRouter:
     )
     async def synthesize_remaining(session_id: str) -> SampleSessionView:
         return await service.synthesize_remaining(session_id)
+
+    @router.post(
+        "/sessions/{session_id}/analyze", response_model=SampleSessionView
+    )
+    async def analyze_session(session_id: str) -> SampleSessionView:
+        return await service.analyze(session_id)
 
     @router.get("/sessions/{session_id}/recordings/{recording_id}/audio")
     async def recording_audio(session_id: str, recording_id: str) -> FileResponse:

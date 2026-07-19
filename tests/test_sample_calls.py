@@ -2,7 +2,11 @@ from fastapi.testclient import TestClient
 
 from apps.api.app.main import create_app
 from apps.api.app.caller.audio import SynthesizedAudio
-from apps.api.app.samples.generator import SyntheticSample
+from apps.api.app.samples.generator import (
+    AnalyzedQuote,
+    SampleAnalysis,
+    SyntheticSample,
+)
 
 
 class FakeAudioAdapter:
@@ -44,6 +48,22 @@ class FakeSampleGenerator:
             )
             for index in range(count)
         ]
+
+    async def analyze(self, *, quotes):
+        assert quotes, "analyzer must receive the collected quotes"
+        return SampleAnalysis(
+            summary=f"Compared {len(quotes)} sample quotes.",
+            lowest_quote_agency=quotes[0]["agency_name"],
+            quotes=[
+                AnalyzedQuote(
+                    agency_name=quote["agency_name"],
+                    quote_total=quote["stated_total"],
+                    binding_status="binding",
+                )
+                for quote in quotes
+            ],
+            observations=["All sample quotes state binding totals."],
+        )
 
 
 def make_app(tmp_path, **overrides):
@@ -134,6 +154,35 @@ def test_synthesize_fills_remaining_slots_with_audio(tmp_path):
         )
         assert audio_response.status_code == 200
         assert audio_response.content == b"synthetic-mp3"
+
+
+def test_analysis_runs_and_persists_on_the_session(tmp_path):
+    with TestClient(make_app(tmp_path)) as client:
+        session = client.post(
+            "/api/v1/samples/sessions", json={"target_quotes": 2}
+        ).json()
+        session_id = session["session_id"]
+
+        blocked = client.post(f"/api/v1/samples/sessions/{session_id}/analyze")
+        assert blocked.status_code == 422
+
+        client.post(
+            f"/api/v1/samples/sessions/{session_id}/recordings",
+            files={"audio": ("sample.webm", b"agency-recording", "audio/webm")},
+            data={"agency_name": "Beacon Movers"},
+        )
+        client.post(f"/api/v1/samples/sessions/{session_id}/synthesize")
+        body = client.post(
+            f"/api/v1/samples/sessions/{session_id}/analyze"
+        ).json()
+        analysis = body["analysis"]
+        assert analysis["summary"] == "Compared 2 sample quotes."
+        assert analysis["lowest_quote_agency"] == "Beacon Movers"
+        assert len(analysis["quotes"]) == 2
+        assert analysis["observations"]
+
+        reloaded = client.get(f"/api/v1/samples/sessions/{session_id}").json()
+        assert reloaded["analysis"]["summary"] == "Compared 2 sample quotes."
 
 
 def test_sample_page_is_served_and_linked(tmp_path):
