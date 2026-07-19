@@ -31,6 +31,12 @@ export const captureVoiceEvidence = (sessionId, payload) =>
     body: JSON.stringify(payload),
   });
 
+export const importElevenLabsConversation = (sessionId, conversationId) =>
+  api(`/api/v1/intake/sessions/${sessionId}/elevenlabs-import`, {
+    method: 'POST',
+    body: JSON.stringify({ conversation_id: conversationId }),
+  });
+
 export const enrichIntake = (sessionId) =>
   api(`/api/v1/research/intake/sessions/${sessionId}/enrich`, { method: 'POST' });
 

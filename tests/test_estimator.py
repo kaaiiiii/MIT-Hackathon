@@ -18,7 +18,13 @@ from apps.api.app.estimator.adapters import (
     InMemoryCatalogResolver,
 )
 from apps.api.app.estimator.errors import EstimatorValidationError
-from apps.api.app.estimator.schemas import CatalogCandidate
+from apps.api.app.estimator.schemas import (
+    CatalogCandidate,
+    ElevenLabsConversationTranscript,
+    ElevenLabsTranscriptTurn,
+    ExtractedTranscriptField,
+    TranscriptFieldExtraction,
+)
 
 
 REQUIRED_MOVING_FIELDS = {
@@ -48,6 +54,46 @@ class _HandoffBuyerModel:
                 f"The move is from {facts['origin.location']} to "
                 f"{facts['destination.location']}. What would you charge?"
             ),
+        )
+
+
+class _CompletedConversationImporter:
+    async def fetch_conversation(self, *, conversation_id, expected_session_id):
+        turns = []
+        for index, value in enumerate(REQUIRED_MOVING_FIELDS.values()):
+            turns.append(
+                ElevenLabsTranscriptTurn(
+                    turn_id=f"el_{conversation_id}_{index}",
+                    role="user",
+                    message=f"My answer is {value}.",
+                    time_in_call_secs=index + 1,
+                )
+            )
+        return ElevenLabsConversationTranscript(
+            conversation_id=conversation_id,
+            agent_id="agent_intake",
+            status="done",
+            intake_session_id=expected_session_id,
+            start_time_unix_secs=1784420000,
+            turns=turns,
+        )
+
+
+class _GroundedTranscriptExtractor:
+    model_name = "fake-grounded-extractor"
+
+    async def extract_fields(self, *, config, transcript):
+        return TranscriptFieldExtraction(
+            fields=[
+                ExtractedTranscriptField(
+                    field_name=field_name,
+                    value=value,
+                    turn_id=transcript.turns[index].turn_id,
+                )
+                for index, (field_name, value) in enumerate(
+                    REQUIRED_MOVING_FIELDS.items()
+                )
+            ]
         )
 
 
@@ -517,6 +563,51 @@ def test_voice_and_document_paths_converge_on_one_spec_shape_and_caller_contract
         assert second_call["call"]["call"]["spec_sha256"] == voice_spec["canonical_hash"]
 
 
+def test_completed_elevenlabs_transcript_recovers_confirmable_caller_context(tmp_path):
+    vendor = VendorTarget(vendor_id="vendor_1", name="Mover One")
+    app = create_app(
+        database_path=str(tmp_path / "elevenlabs-recovery.db"),
+        inputs=InMemoryCallerInputGateway(vendors=[vendor]),
+        estimator_conversation_importer=_CompletedConversationImporter(),
+        estimator_transcript_extractor=_GroundedTranscriptExtractor(),
+    )
+    with TestClient(app) as client:
+        session_id = _create_session(client)["session_id"]
+        imported = client.post(
+            f"/api/v1/intake/sessions/{session_id}/elevenlabs-import",
+            json={"conversation_id": "conv_recovery123"},
+        )
+        assert imported.status_code == 200, imported.text
+        body = imported.json()
+        assert body["imported_voice_turn_count"] == len(REQUIRED_MOVING_FIELDS)
+        assert set(body["imported_fields"]) == set(REQUIRED_MOVING_FIELDS)
+        assert body["session"]["status"] == "awaiting_confirmation"
+        assert {
+            name: field["value"]
+            for name, field in body["session"]["fields"].items()
+        } == REQUIRED_MOVING_FIELDS
+        assert all(
+            field["source"]["reference"].startswith("el_conv_recovery123_")
+            for field in body["session"]["fields"].values()
+        )
+
+        confirmed = client.post(
+            f"/api/v1/intake/sessions/{session_id}/confirm",
+            json={"approved": True, "confirmed_by": "recovery_user"},
+        )
+        assert confirmed.status_code == 200, confirmed.text
+        version = confirmed.json()
+        created_call = client.post(
+            "/api/v1/calls",
+            json={
+                "job_spec_version_id": version["version_id"],
+                "vendor_id": "vendor_1",
+            },
+        )
+        assert created_call.status_code == 201, created_call.text
+        assert created_call.json()["spec_sha256"] == version["canonical_hash"]
+
+
 @pytest.mark.asyncio
 async def test_elevenlabs_agents_adapter_mints_server_side_signed_url():
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -544,6 +635,51 @@ async def test_elevenlabs_agents_adapter_mints_server_side_signed_url():
     )
     assert provider == "elevenlabs_agents"
     assert signed_url.startswith("wss://api.elevenlabs.io/")
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_agents_adapter_fetches_bound_completed_conversation():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["xi-api-key"] == "eleven-secret"
+        assert request.url.path.endswith("/conv_recovery123")
+        return httpx.Response(
+            200,
+            json={
+                "conversation_id": "conv_recovery123",
+                "agent_id": "agent_intake",
+                "status": "done",
+                "metadata": {"start_time_unix_secs": 1784420000},
+                "conversation_initiation_client_data": {
+                    "dynamic_variables": {"intake_session_id": "intake_1"}
+                },
+                "transcript": [
+                    {
+                        "role": "agent",
+                        "message": "What needs to be moved?",
+                        "time_in_call_secs": 0,
+                    },
+                    {
+                        "role": "user",
+                        "message": "One upright piano.",
+                        "time_in_call_secs": 2,
+                    },
+                ],
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = ElevenLabsAgentsIntakeAdapter(
+        api_key="eleven-secret",
+        agent_id="agent_intake",
+        client=client,
+    )
+    transcript = await adapter.fetch_conversation(
+        conversation_id="conv_recovery123",
+        expected_session_id="intake_1",
+    )
+    assert transcript.intake_session_id == "intake_1"
+    assert transcript.turns[1].message == "One upright piano."
     await client.aclose()
 
 

@@ -34,6 +34,10 @@ Open `http://127.0.0.1:8000/`. For Vite hot reload, run `npm run dev` in
 - `POST /api/v1/intake/sessions` starts or resumes a vertical-configured draft.
 - `POST /api/v1/intake/sessions/{id}/voice` starts an ElevenLabs Agents connection or
   applies one evidenced transcript turn through the deterministic question planner.
+- `POST /api/v1/intake/sessions/{id}/elevenlabs-import` is the post-call fallback.
+  It fetches a completed ElevenLabs conversation by `conversation_id`, verifies the
+  Agent and `intake_session_id`, uses GPT to propose only verbatim user-spoken values,
+  and stores them with stable transcript-turn references. It never confirms a draft.
 - `POST /api/v1/intake/sessions/{id}/documents` parses one supported document and
   retains page/line/bounding-box provenance.
 - `POST /api/v1/intake/sessions/{id}/resolve` starts catalog search or records the
@@ -193,6 +197,13 @@ blocking client tool named `capture_intake_evidence`. Its parameters are
 The browser registers the tool and posts each supported answer to the Estimator's
 evidence endpoint, then returns the deterministic planner's next question to the
 agent. See `docs/ESTIMATOR.md` for the exact parameter contract.
+
+If the live client tool does not complete, copy the finished conversation's `conv_…`
+ID from ElevenLabs into **Post-call fallback** on the Home page. The API retrieves the
+cloud transcript with `ELEVENLABS_API_KEY`, extracts fields with
+`OPENAI_ESTIMATOR_MODEL` (falling back to `OPENAI_RESEARCH_MODEL`), and displays the
+evidence for normal user confirmation. After confirmation, **Download Caller context
+JSON** exports the immutable object that the Caller reads by `version_id`.
 
 Without this value, the intake voice endpoint uses the simulated adapter for automated
 tests; the browser clearly reports that live ElevenLabs Agents is not configured.

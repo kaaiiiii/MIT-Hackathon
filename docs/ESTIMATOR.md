@@ -61,6 +61,20 @@ the transcript-backed value to the same `/voice` application service used in tes
 then returns the planner's next field and spoken question to the agent. Configure the
 tool to wait for its response so the agent cannot race ahead of durable evidence.
 
+### Post-call transcript fallback
+
+If the browser tool fails, `POST
+/api/v1/intake/sessions/{session_id}/elevenlabs-import` accepts a completed ElevenLabs
+`conversation_id`. The server retrieves the conversation with the workspace API key
+and rejects it unless its Agent ID and initiation-time `intake_session_id` match the
+draft. GPT then proposes schema fields using user turns only. Every accepted value must
+be an exact substring of its referenced turn or the backend drops it. Imported fields
+remain a draft and follow the normal evidence review and explicit-confirmation path.
+
+The extraction model is configured by `OPENAI_ESTIMATOR_MODEL`, falling back to
+`OPENAI_RESEARCH_MODEL` and then `gpt-5.6-luna`. This repair path does not infer
+unknowns, use agent questions as evidence, or write directly to `job_spec_versions`.
+
 ## Document parser seam
 
 The built-in deterministic parser accepts `moving_inventory_json` and

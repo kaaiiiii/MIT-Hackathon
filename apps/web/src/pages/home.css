@@ -80,6 +80,9 @@
 .intake-widget { margin-top: var(--s4); text-align: left; }
 .intake-widget elevenlabs-convai { display: block; width: 100%; }
 .intake-error { margin-top: var(--s3); color: var(--red); }
+.intake-recovery { display: grid; gap: var(--s2); margin-top: var(--s4); padding: var(--s3); border: var(--hairline); text-align: left; }
+.intake-recovery label { color: var(--paper-2); }
+.intake-recovery input { width: 100%; padding: var(--s2) var(--s3); border: var(--hairline); background: var(--ink-1); color: var(--paper-0); font-family: var(--font-mono); }
 .intake-evidence { margin-top: var(--s5); border-top: var(--hairline); text-align: left; }
 .intake-evidence__row { display: grid; grid-template-columns: minmax(9rem, .8fr) 1.2fr; gap: .2rem var(--s3); padding: var(--s3) 0; border-bottom: var(--hairline); }
 .intake-evidence__row span { color: var(--paper-2); font-size: var(--fs-micro); }

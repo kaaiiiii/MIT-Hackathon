@@ -5,7 +5,12 @@ import json
 import httpx
 
 from .errors import EstimatorValidationError
-from .schemas import CatalogCandidate, ParsedDocumentField
+from .schemas import (
+    CatalogCandidate,
+    ElevenLabsConversationTranscript,
+    ElevenLabsTranscriptTurn,
+    ParsedDocumentField,
+)
 
 
 class StructuredJsonDocumentParser:
@@ -110,6 +115,81 @@ class ElevenLabsAgentsIntakeAdapter:
             )
         return "elevenlabs_agents", signed_url
 
+    async def fetch_conversation(
+        self, *, conversation_id: str, expected_session_id: str
+    ) -> ElevenLabsConversationTranscript:
+        try:
+            response = await self.client.get(
+                f"https://api.elevenlabs.io/v1/convai/conversations/{conversation_id}",
+                headers={"xi-api-key": self.api_key},
+            )
+            response.raise_for_status()
+            payload = response.json()
+        except httpx.HTTPStatusError as exc:
+            detail = self._safe_error_detail(exc.response)
+            raise EstimatorValidationError(
+                "ElevenLabs could not retrieve the completed intake conversation "
+                f"(HTTP {exc.response.status_code}: {detail})"
+            ) from exc
+        except httpx.RequestError as exc:
+            raise EstimatorValidationError(
+                "ElevenLabs could not reach the conversation history service "
+                f"({exc.__class__.__name__}: {exc})"
+            ) from exc
+        except ValueError as exc:
+            raise EstimatorValidationError(
+                "ElevenLabs returned an invalid conversation response"
+            ) from exc
+
+        if not isinstance(payload, dict):
+            raise EstimatorValidationError("ElevenLabs returned an invalid conversation")
+        if payload.get("agent_id") != self.agent_id:
+            raise EstimatorValidationError(
+                "The ElevenLabs conversation belongs to a different intake Agent"
+            )
+        if payload.get("status") != "done":
+            raise EstimatorValidationError(
+                "The ElevenLabs conversation is not ready; wait for post-call processing"
+            )
+        initiation = payload.get("conversation_initiation_client_data")
+        session_ids = self._find_values(initiation, "intake_session_id")
+        if expected_session_id not in session_ids:
+            raise EstimatorValidationError(
+                "The ElevenLabs conversation does not belong to this Estimator session"
+            )
+
+        turns: list[ElevenLabsTranscriptTurn] = []
+        for index, item in enumerate(payload.get("transcript") or []):
+            if not isinstance(item, dict) or item.get("role") not in {"user", "agent"}:
+                continue
+            message = item.get("message")
+            if not isinstance(message, str) or not message.strip():
+                continue
+            raw_time = item.get("time_in_call_secs")
+            time_in_call_secs = float(raw_time) if isinstance(raw_time, (int, float)) else 0
+            turns.append(
+                ElevenLabsTranscriptTurn(
+                    turn_id=f"el_{conversation_id}_{index}",
+                    role=item["role"],
+                    message=message.strip(),
+                    time_in_call_secs=max(time_in_call_secs, 0),
+                )
+            )
+        if not any(turn.role == "user" for turn in turns):
+            raise EstimatorValidationError(
+                "The ElevenLabs conversation contains no user transcript turns"
+            )
+        metadata = payload.get("metadata")
+        start_time = metadata.get("start_time_unix_secs") if isinstance(metadata, dict) else None
+        return ElevenLabsConversationTranscript(
+            conversation_id=conversation_id,
+            agent_id=self.agent_id,
+            status="done",
+            intake_session_id=expected_session_id,
+            start_time_unix_secs=start_time if isinstance(start_time, int) else None,
+            turns=turns,
+        )
+
     @staticmethod
     def _safe_error_detail(response: httpx.Response) -> str:
         """Return useful ElevenLabs diagnostics without echoing credentials."""
@@ -129,6 +209,19 @@ class ElevenLabsAgentsIntakeAdapter:
         if isinstance(detail, str) and detail.strip():
             return detail.strip()
         return "upstream request failed"
+
+    @staticmethod
+    def _find_values(value: object, key: str) -> set[str]:
+        found: set[str] = set()
+        if isinstance(value, dict):
+            for item_key, item_value in value.items():
+                if item_key == key and isinstance(item_value, str):
+                    found.add(item_value)
+                found.update(ElevenLabsAgentsIntakeAdapter._find_values(item_value, key))
+        elif isinstance(value, list):
+            for item in value:
+                found.update(ElevenLabsAgentsIntakeAdapter._find_values(item, key))
+        return found
 
     async def close(self) -> None:
         if self._owns_client:

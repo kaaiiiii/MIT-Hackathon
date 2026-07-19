@@ -45,9 +45,16 @@ from .estimator.errors import (
     EstimatorValidationError,
 )
 from .estimator.persistence import SQLiteEstimatorStore
-from .estimator.ports import CatalogResolver, DocumentParser, IntakeVoiceAdapter
+from .estimator.ports import (
+    CatalogResolver,
+    ConversationTranscriptImporter,
+    DocumentParser,
+    IntakeVoiceAdapter,
+    TranscriptFieldExtractor,
+)
 from .estimator.router import build_estimator_router
 from .estimator.service import EstimatorService
+from .estimator.transcript_extractor import OpenAITranscriptFieldExtractor
 from .estimator.verticals import VerticalConfigLoader
 from .research.openai_researcher import ContextResearcher, OpenAIContextResearcher
 from .research.persistence import SQLiteResearchStore
@@ -82,6 +89,8 @@ def create_app(
     estimator_catalog_resolver: CatalogResolver | None = None,
     estimator_configs: VerticalConfigLoader | None = None,
     estimator_voice_adapter: IntakeVoiceAdapter | None = None,
+    estimator_conversation_importer: ConversationTranscriptImporter | None = None,
+    estimator_transcript_extractor: TranscriptFieldExtractor | None = None,
     context_researcher: ContextResearcher | None = None,
 ) -> FastAPI:
     store = SQLiteCallerStore(
@@ -90,6 +99,11 @@ def create_app(
     configured_estimator_voice_adapter = (
         estimator_voice_adapter or _configured_intake_voice_adapter()
     )
+    configured_conversation_importer = estimator_conversation_importer
+    if configured_conversation_importer is None and hasattr(
+        configured_estimator_voice_adapter, "fetch_conversation"
+    ):
+        configured_conversation_importer = configured_estimator_voice_adapter  # type: ignore[assignment]
     upstream_inputs = inputs or InMemoryCallerInputGateway()
     composed_inputs = EstimatorAwareCallerInputGateway(
         store.connection, upstream_inputs
@@ -101,6 +115,10 @@ def create_app(
         document_parser=estimator_document_parser or StructuredJsonDocumentParser(),
         catalog_resolver=estimator_catalog_resolver or InMemoryCatalogResolver(),
         voice_adapter=configured_estimator_voice_adapter,
+        conversation_importer=configured_conversation_importer,
+        transcript_extractor=(
+            estimator_transcript_extractor or _configured_transcript_extractor()
+        ),
     )
     research_store = SQLiteResearchStore(store.connection)
     research_service = ResearchService(
@@ -270,6 +288,19 @@ def _configured_context_researcher() -> ContextResearcher | None:
     return OpenAIContextResearcher(
         api_key=api_key,
         model=os.getenv("OPENAI_RESEARCH_MODEL", "gpt-5.6-luna"),
+    )
+
+
+def _configured_transcript_extractor() -> TranscriptFieldExtractor | None:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    return OpenAITranscriptFieldExtractor(
+        api_key=api_key,
+        model=os.getenv(
+            "OPENAI_ESTIMATOR_MODEL",
+            os.getenv("OPENAI_RESEARCH_MODEL", "gpt-5.6-luna"),
+        ),
     )
 
 

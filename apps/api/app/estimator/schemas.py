@@ -179,6 +179,46 @@ class VoiceTurnResponse(BaseModel):
     provider_context: dict[str, Any] = Field(default_factory=dict)
 
 
+class ElevenLabsConversationImportRequest(BaseModel):
+    conversation_id: str = Field(pattern=r"^conv_[A-Za-z0-9]+$")
+
+
+class ElevenLabsTranscriptTurn(BaseModel):
+    turn_id: str = Field(min_length=1)
+    role: Literal["user", "agent"]
+    message: str = Field(min_length=1)
+    time_in_call_secs: float = Field(default=0, ge=0)
+
+
+class ElevenLabsConversationTranscript(BaseModel):
+    conversation_id: str
+    agent_id: str
+    status: str
+    intake_session_id: str
+    start_time_unix_secs: int | None = None
+    turns: list[ElevenLabsTranscriptTurn]
+
+
+class ExtractedTranscriptField(BaseModel):
+    field_name: str = Field(min_length=1)
+    value: str = Field(min_length=1)
+    turn_id: str = Field(min_length=1)
+
+
+class TranscriptFieldExtraction(BaseModel):
+    fields: list[ExtractedTranscriptField] = Field(default_factory=list)
+
+
+class ElevenLabsConversationImportResult(BaseModel):
+    conversation_id: str
+    agent_id: str
+    transcript_turn_count: int
+    imported_voice_turn_count: int
+    imported_fields: list[str]
+    skipped_fields: list[str] = Field(default_factory=list)
+    session: IntakeSessionView
+
+
 class CatalogResolveRequest(BaseModel):
     field_name: str | None = None
     raw_user_statement: str | None = None

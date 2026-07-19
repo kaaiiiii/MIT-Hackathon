@@ -5,6 +5,7 @@ import {
   confirmIntake,
   createIntakeSession,
   enrichIntake,
+  importElevenLabsConversation,
   startVoiceIntake,
 } from '../lib/api';
 import { useReport } from '../lib/ReportContext';
@@ -75,6 +76,8 @@ export default function EstimatorIntake() {
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
   const [voiceEnded, setVoiceEnded] = useState(false);
+  const [conversationId, setConversationId] = useState('');
+  const [importSummary, setImportSummary] = useState(null);
   const widgetHost = useRef(null);
   const conversationStartedAt = useRef(null);
   const researchStarted = useRef(false);
@@ -150,8 +153,13 @@ export default function EstimatorIntake() {
         },
       };
     };
-    const handleConversationStarted = () => {
+    const handleConversationStarted = (event) => {
       conversationStartedAt.current = performance.now();
+      const detail = event?.detail;
+      const detectedConversationId = detail?.conversationId ?? detail?.conversation_id;
+      if (typeof detectedConversationId === 'string') {
+        setConversationId(detectedConversationId);
+      }
       setVoiceEnded(false);
       setError(null);
       setStatus('Live voice interview connected. Speak naturally.');
@@ -234,6 +242,39 @@ export default function EstimatorIntake() {
     }
   };
 
+  const recoverConversation = async () => {
+    const normalizedId = conversationId.trim();
+    if (!session || busy || !normalizedId) return;
+    setBusy(true);
+    setError(null);
+    setStatus('Fetching the completed ElevenLabs transcript and extracting evidence…');
+    try {
+      const result = await importElevenLabsConversation(session.session_id, normalizedId);
+      setSession(result.session);
+      setImportSummary(result);
+      setStatus(`Recovered ${result.imported_fields.length} evidence field(s) from the ElevenLabs transcript. Review them before confirmation.`);
+      if (result.session.status === 'awaiting_confirmation') {
+        void runResearch(result.session.session_id);
+      }
+    } catch (err) {
+      setError(err.message);
+      setStatus('The ElevenLabs transcript could not be recovered.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const downloadConfirmedJson = () => {
+    if (!confirmed) return;
+    const blob = new Blob([JSON.stringify(confirmed, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${confirmed.version_id}-caller-context.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
   const confirm = async () => {
     if (!session || busy) return;
     setBusy(true);
@@ -270,6 +311,34 @@ export default function EstimatorIntake() {
           {busy ? 'Reconnecting…' : 'Reconnect voice interview'}
         </button>
       )}
+      {session && !confirmed && (
+        <div className="intake-recovery">
+          <label className="micro" htmlFor="elevenlabs-conversation-id">
+            Post-call fallback · ElevenLabs conversation ID
+          </label>
+          <input
+            id="elevenlabs-conversation-id"
+            type="text"
+            value={conversationId}
+            onChange={(event) => setConversationId(event.target.value)}
+            placeholder="conv_…"
+            spellCheck="false"
+          />
+          <button
+            type="button"
+            className="btn"
+            onClick={recoverConversation}
+            disabled={busy || !conversationId.trim()}
+          >
+            {busy ? 'Recovering…' : 'Recover transcript into Estimator'}
+          </button>
+        </div>
+      )}
+      {importSummary && (
+        <p className="micro muted">
+          Imported from {importSummary.conversation_id}: {importSummary.imported_fields.join(', ') || 'no supported fields'}.
+        </p>
+      )}
       <EvidenceList fields={session?.fields} />
       {!!session?.missing_required_fields?.length && (
         <p className="micro muted">Still needed: {session.missing_required_fields.join(', ')}</p>
@@ -290,6 +359,9 @@ export default function EstimatorIntake() {
             <Link className="btn btn--small" to={`/report?spec=${encodeURIComponent(confirmed.version_id)}`}>
               View live report
             </Link>
+            <button type="button" className="btn btn--small" onClick={downloadConfirmedJson}>
+              Download Caller context JSON
+            </button>
           </div>
         </div>
       )}

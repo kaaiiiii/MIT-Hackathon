@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from .schemas import CatalogCandidate, ParsedDocumentField
+from .schemas import (
+    CatalogCandidate,
+    ElevenLabsConversationTranscript,
+    ParsedDocumentField,
+    TranscriptFieldExtraction,
+)
+from .verticals import VerticalConfig
 
 
 class IntakeVoiceConnection(Protocol):
@@ -14,6 +20,23 @@ class IntakeVoiceAdapter(Protocol):
     async def create_connection(
         self, *, session_id: str, context: dict
     ) -> tuple[str, str]: ...
+
+
+class ConversationTranscriptImporter(Protocol):
+    async def fetch_conversation(
+        self, *, conversation_id: str, expected_session_id: str
+    ) -> ElevenLabsConversationTranscript: ...
+
+
+class TranscriptFieldExtractor(Protocol):
+    model_name: str
+
+    async def extract_fields(
+        self,
+        *,
+        config: VerticalConfig,
+        transcript: ElevenLabsConversationTranscript,
+    ) -> TranscriptFieldExtraction: ...
 
 
 class DocumentParser(Protocol):

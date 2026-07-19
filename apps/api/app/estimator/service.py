@@ -3,14 +3,20 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
 from .errors import EstimatorConflictError, EstimatorValidationError
 from .persistence import SQLiteEstimatorStore
 from .planner import IntakeQuestionPlanner
-from .ports import CatalogResolver, DocumentParser, IntakeVoiceAdapter
+from .ports import (
+    CatalogResolver,
+    ConversationTranscriptImporter,
+    DocumentParser,
+    IntakeVoiceAdapter,
+    TranscriptFieldExtractor,
+)
 from .schemas import (
     BenchmarkRef,
     CatalogCandidate,
@@ -18,6 +24,7 @@ from .schemas import (
     ConfirmSpecRequest,
     ConfirmedJobSpecView,
     DocumentParseResult,
+    ElevenLabsConversationImportResult,
     EvidenceModality,
     EvidenceSource,
     EvidencedField,
@@ -43,12 +50,16 @@ class EstimatorService:
         document_parser: DocumentParser,
         catalog_resolver: CatalogResolver,
         voice_adapter: IntakeVoiceAdapter,
+        conversation_importer: ConversationTranscriptImporter | None = None,
+        transcript_extractor: TranscriptFieldExtractor | None = None,
     ) -> None:
         self.store = store
         self.configs = configs
         self.document_parser = document_parser
         self.catalog_resolver = catalog_resolver
         self.voice_adapter = voice_adapter
+        self.conversation_importer = conversation_importer
+        self.transcript_extractor = transcript_extractor
         self.questions = IntakeQuestionPlanner()
 
     def create_session(self, request: IntakeSessionCreate) -> IntakeSessionView:
@@ -193,6 +204,97 @@ class EstimatorService:
             self.store.add_evidence(session_id, request.field_name, evidence)
         self._recalculate_status(session_id, config)
         return self._voice_response(session_id)
+
+    async def import_elevenlabs_conversation(
+        self, session_id: str, conversation_id: str
+    ) -> ElevenLabsConversationImportResult:
+        row = self._assert_draft_mutable(session_id)
+        if self.conversation_importer is None:
+            raise EstimatorValidationError(
+                "ElevenLabs conversation import is not configured on the API server"
+            )
+        if self.transcript_extractor is None:
+            raise EstimatorValidationError(
+                "GPT transcript extraction is not configured on the API server"
+            )
+        config = self.configs.load(row["vertical"])
+        transcript = await self.conversation_importer.fetch_conversation(
+            conversation_id=conversation_id,
+            expected_session_id=session_id,
+        )
+        extraction = await self.transcript_extractor.extract_fields(
+            config=config,
+            transcript=transcript,
+        )
+        user_turns = {
+            turn.turn_id: turn for turn in transcript.turns if turn.role == "user"
+        }
+
+        valid_fields = []
+        skipped_fields: list[str] = []
+        seen_fields: set[str] = set()
+        for candidate in extraction.fields:
+            if candidate.field_name in seen_fields:
+                skipped_fields.append(candidate.field_name)
+                continue
+            seen_fields.add(candidate.field_name)
+            turn = user_turns.get(candidate.turn_id)
+            if (
+                candidate.field_name not in config.fields
+                or turn is None
+                or not self._value_supported_by_text(candidate.value, turn.message)
+            ):
+                skipped_fields.append(candidate.field_name)
+                continue
+            valid_fields.append((candidate, turn))
+
+        imported_turn_count = 0
+        for turn in user_turns.values():
+            if self.store.voice_turn_exists(session_id, turn.turn_id):
+                continue
+            self.store.add_voice_turn(session_id, turn.turn_id, turn.message)
+            imported_turn_count += 1
+
+        current_fields = self.store.selected_evidence(session_id)
+        imported_fields: list[str] = []
+        for candidate, turn in valid_fields:
+            current = current_fields.get(candidate.field_name)
+            if current is not None and current.value == candidate.value:
+                skipped_fields.append(candidate.field_name)
+                continue
+            if transcript.start_time_unix_secs is None:
+                captured_at = datetime.now(UTC)
+            else:
+                captured_at = datetime.fromtimestamp(
+                    transcript.start_time_unix_secs, UTC
+                ) + timedelta(seconds=turn.time_in_call_secs)
+            evidence = EvidencedField(
+                value=candidate.value,
+                source=EvidenceSource(
+                    modality=EvidenceModality.VOICE,
+                    reference=turn.turn_id,
+                    captured_at=captured_at,
+                ),
+                confidence=FieldConfidence.EXPLICIT,
+            )
+            self.store.add_evidence(
+                session_id,
+                candidate.field_name,
+                evidence,
+                review_required=current is not None,
+            )
+            imported_fields.append(candidate.field_name)
+
+        self._recalculate_status(session_id, config)
+        return ElevenLabsConversationImportResult(
+            conversation_id=transcript.conversation_id,
+            agent_id=transcript.agent_id,
+            transcript_turn_count=len(transcript.turns),
+            imported_voice_turn_count=imported_turn_count,
+            imported_fields=imported_fields,
+            skipped_fields=sorted(set(skipped_fields)),
+            session=self.get_session(session_id),
+        )
 
     async def apply_document(
         self,

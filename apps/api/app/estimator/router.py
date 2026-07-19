@@ -7,6 +7,8 @@ from .schemas import (
     ConfirmSpecRequest,
     ConfirmedJobSpecView,
     DocumentParseResult,
+    ElevenLabsConversationImportRequest,
+    ElevenLabsConversationImportResult,
     IntakeSessionCreate,
     IntakeSessionView,
     PendingCatalogResolution,
@@ -45,6 +47,17 @@ def build_estimator_router(service: EstimatorService) -> APIRouter:
         if request is None:
             return await service.start_voice(session_id)
         return service.apply_voice_turn(session_id, request)
+
+    @router.post(
+        "/sessions/{session_id}/elevenlabs-import",
+        response_model=ElevenLabsConversationImportResult,
+    )
+    async def import_elevenlabs_conversation(
+        session_id: str, request: ElevenLabsConversationImportRequest
+    ) -> ElevenLabsConversationImportResult:
+        return await service.import_elevenlabs_conversation(
+            session_id, request.conversation_id
+        )
 
     @router.post(
         "/sessions/{session_id}/documents",

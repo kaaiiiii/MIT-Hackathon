@@ -8,10 +8,14 @@ research, Caller, and reporting-context APIs.
 1. Home obtains microphone permission, creates an Estimator session, validates the
    required `disclosure` and `spoken_question` values, and obtains an ElevenLabs
    Agents signed URL.
-2. The `capture_intake_evidence` client tool stores each transcript-backed field.
+2. The `capture_intake_evidence` client tool stores each transcript-backed field. If
+   that live path fails, the post-call fallback imports a completed ElevenLabs
+   `conversation_id`, verifies its session binding, and uses GPT to recover only
+   verbatim user-spoken evidence into the same draft.
 3. When the required field set closes, GPT-5.6 Luna research runs and its summary,
    questions, citations, and limitations are displayed before confirmation.
-4. Confirmation stores the immutable `version_id` locally and exposes Caller Lab.
+4. Confirmation stores the immutable `version_id` locally, exposes Caller Lab, and
+   enables download of the same immutable Caller-context JSON.
 5. Report loads persisted calls and research for that exact version. **Refresh calls**
    reloads evidence; **Prepare final report** requires terminal calls and runs the
    fresh pre-report research gate.
