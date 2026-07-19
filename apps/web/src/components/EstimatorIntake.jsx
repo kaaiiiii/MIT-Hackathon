@@ -356,6 +356,9 @@ export default function EstimatorIntake() {
             <a className="btn" href={`/demo/?job_spec_version_id=${encodeURIComponent(confirmed.version_id)}`}>
               Open Caller Lab →
             </a>
+            <a className="btn btn--small" href="/demo/samples.html" target="_blank" rel="noopener">
+              Play the agency part (optional) →
+            </a>
             <Link className="btn btn--small" to={`/report?spec=${encodeURIComponent(confirmed.version_id)}`}>
               View live report
             </Link>
