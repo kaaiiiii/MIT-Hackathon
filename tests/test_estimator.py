@@ -17,6 +17,7 @@ from apps.api.app.estimator.adapters import (
     ElevenLabsAgentsIntakeAdapter,
     InMemoryCatalogResolver,
 )
+from apps.api.app.estimator.errors import EstimatorValidationError
 from apps.api.app.estimator.schemas import CatalogCandidate
 
 
@@ -543,6 +544,39 @@ async def test_elevenlabs_agents_adapter_mints_server_side_signed_url():
     )
     assert provider == "elevenlabs_agents"
     assert signed_url.startswith("wss://api.elevenlabs.io/")
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_agents_adapter_reports_sanitized_upstream_error():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["xi-api-key"] == "bad-secret"
+        return httpx.Response(
+            401,
+            json={
+                "detail": {
+                    "code": "invalid_api_key",
+                    "message": "Invalid API key",
+                    "request_id": "request_123",
+                }
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = ElevenLabsAgentsIntakeAdapter(
+        api_key="bad-secret",
+        agent_id="agent_intake",
+        client=client,
+    )
+
+    with pytest.raises(EstimatorValidationError) as exc_info:
+        await adapter.create_connection(session_id="intake_1", context={})
+
+    message = str(exc_info.value)
+    assert "HTTP 401" in message
+    assert "invalid_api_key" in message
+    assert "request_id=request_123" in message
+    assert "bad-secret" not in message
     await client.aclose()
 
 

@@ -9,6 +9,27 @@ import {
 } from '../lib/api';
 import { useReport } from '../lib/ReportContext';
 
+const REQUIRED_ELEVENLABS_VARIABLES = [
+  'disclosure',
+  'next_field',
+  'question_objective',
+  'spoken_question',
+];
+
+function validateVoiceConnection(connection) {
+  if (connection.voice_provider !== 'elevenlabs_agents') {
+    throw new Error('ElevenLabs Agents is not configured on the API server.');
+  }
+  const missing = REQUIRED_ELEVENLABS_VARIABLES.filter((name) => {
+    const value = connection.provider_context?.[name];
+    return typeof value !== 'string' || !value.trim();
+  });
+  if (missing.length) {
+    throw new Error(`The API did not supply required ElevenLabs dynamic variables: ${missing.join(', ')}.`);
+  }
+  return connection;
+}
+
 function EvidenceList({ fields }) {
   const entries = Object.entries(fields ?? {});
   if (!entries.length) return null;
@@ -53,9 +74,28 @@ export default function EstimatorIntake() {
   const [status, setStatus] = useState('Tell us about the job once. We will preserve the evidence for every vendor call.');
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [voiceEnded, setVoiceEnded] = useState(false);
   const widgetHost = useRef(null);
+  const conversationStartedAt = useRef(null);
   const researchStarted = useRef(false);
   const { loadBackendReport } = useReport();
+
+  const confirmMicrophoneAccess = async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('This browser does not provide microphone access. Use a current Chrome, Edge, or Safari browser.');
+    }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (err) {
+      if (err?.name === 'NotAllowedError') {
+        throw new Error('Microphone permission was denied. Allow microphone access in the browser address bar, then try again.');
+      }
+      throw new Error(`The microphone could not be opened: ${err?.message ?? 'unknown browser error'}`);
+    } finally {
+      stream?.getTracks().forEach((track) => track.stop());
+    }
+  };
 
   const runResearch = useCallback(async (sessionId) => {
     if (researchStarted.current) return;
@@ -82,7 +122,9 @@ export default function EstimatorIntake() {
     widget.setAttribute('start-call-text', 'Begin vocal description');
     widget.setAttribute('end-call-text', 'Finish intake');
     widget.setAttribute('dynamic-variables', JSON.stringify(voice.provider_context ?? {}));
-    widget.addEventListener('elevenlabs-convai:call', (event) => {
+    const handleCall = (event) => {
+      setError(null);
+      setStatus('ElevenLabs is opening the live voice conversation…');
       event.detail.config.clientTools = {
         capture_intake_evidence: async (parameters) => {
           const result = await captureVoiceEvidence(voice.provider_context.intake_session_id, {
@@ -107,28 +149,86 @@ export default function EstimatorIntake() {
           };
         },
       };
-    });
+    };
+    const handleConversationStarted = () => {
+      conversationStartedAt.current = performance.now();
+      setVoiceEnded(false);
+      setError(null);
+      setStatus('Live voice interview connected. Speak naturally.');
+    };
+    const handleConversationEnded = (event) => {
+      const elapsedSeconds = conversationStartedAt.current == null
+        ? null
+        : (performance.now() - conversationStartedAt.current) / 1000;
+      conversationStartedAt.current = null;
+      setVoiceEnded(true);
+      const detail = event?.detail;
+      const reason = detail?.reason ?? detail?.terminationReason ?? detail?.termination_reason;
+      if (elapsedSeconds != null && elapsedSeconds < 5) {
+        const suffix = reason ? ` Reason: ${reason}.` : '';
+        setError(`ElevenLabs ended the conversation after ${elapsedSeconds.toFixed(1)} seconds.${suffix} Check the Agent conversation log for an End Call or guardrail event.`);
+        setStatus('The voice session ended before intake began. You can reconnect with a fresh signed URL.');
+        return;
+      }
+      setStatus(reason ? `Voice conversation ended: ${reason}.` : 'Voice conversation ended.');
+    };
+    const handleConversationError = (event) => {
+      const detail = event?.detail;
+      const message = detail?.message ?? detail?.error?.message ?? 'The ElevenLabs widget reported a connection error.';
+      setVoiceEnded(true);
+      setError(String(message));
+      setStatus('The live voice session failed. You can reconnect with a fresh signed URL.');
+    };
+    widget.addEventListener('elevenlabs-convai:call', handleCall);
+    widget.addEventListener('conversationStarted', handleConversationStarted);
+    widget.addEventListener('conversationEnded', handleConversationEnded);
+    widget.addEventListener('error', handleConversationError);
     host.append(widget);
-    return () => widget.remove();
+    return () => {
+      widget.removeEventListener('elevenlabs-convai:call', handleCall);
+      widget.removeEventListener('conversationStarted', handleConversationStarted);
+      widget.removeEventListener('conversationEnded', handleConversationEnded);
+      widget.removeEventListener('error', handleConversationError);
+      widget.remove();
+    };
   }, [voice, runResearch]);
 
   const start = async () => {
     if (busy) return;
     setBusy(true);
     setError(null);
-    setStatus('Opening a private ElevenLabs intake session…');
+    setStatus('Checking microphone permission…');
     try {
+      await confirmMicrophoneAccess();
+      setStatus('Microphone confirmed. Opening a private ElevenLabs intake session…');
       const draft = await createIntakeSession();
       setSession(draft);
-      const connection = await startVoiceIntake(draft.session_id);
-      if (connection.voice_provider !== 'elevenlabs_agents') {
-        throw new Error('ElevenLabs Agents is not configured on the API server.');
-      }
+      const connection = validateVoiceConnection(await startVoiceIntake(draft.session_id));
+      setVoiceEnded(false);
       setVoice(connection);
-      setStatus('Voice interview ready. Start speaking in the panel below.');
+      setStatus('Microphone confirmed. Voice interview ready—start speaking in the panel below.');
     } catch (err) {
       setError(err.message);
       setStatus('The intake session could not start.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const reconnectVoice = async () => {
+    if (!session || busy) return;
+    setBusy(true);
+    setError(null);
+    setStatus('Requesting a fresh ElevenLabs signed URL…');
+    try {
+      await confirmMicrophoneAccess();
+      const connection = validateVoiceConnection(await startVoiceIntake(session.session_id));
+      setVoiceEnded(false);
+      setVoice(connection);
+      setStatus('Fresh voice session ready. Select Begin vocal description.');
+    } catch (err) {
+      setError(err.message);
+      setStatus('The voice session could not reconnect.');
     } finally {
       setBusy(false);
     }
@@ -165,6 +265,11 @@ export default function EstimatorIntake() {
       <p className="call-slot__note" role="status">{status}</p>
       {error && <p className="intake-error micro">{error}</p>}
       <div className="intake-widget" ref={widgetHost} />
+      {voiceEnded && session && !confirmed && (
+        <button type="button" className="btn" onClick={reconnectVoice} disabled={busy}>
+          {busy ? 'Reconnecting…' : 'Reconnect voice interview'}
+        </button>
+      )}
       <EvidenceList fields={session?.fields} />
       {!!session?.missing_required_fields?.length && (
         <p className="micro muted">Still needed: {session.missing_required_fields.join(', ')}</p>

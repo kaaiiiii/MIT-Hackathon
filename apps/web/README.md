@@ -5,7 +5,9 @@ research, Caller, and reporting-context APIs.
 
 ## Connected workflow
 
-1. Home creates an Estimator session and obtains an ElevenLabs Agents signed URL.
+1. Home obtains microphone permission, creates an Estimator session, validates the
+   required `disclosure` and `spoken_question` values, and obtains an ElevenLabs
+   Agents signed URL.
 2. The `capture_intake_evidence` client tool stores each transcript-backed field.
 3. When the required field set closes, GPT-5.6 Luna research runs and its summary,
    questions, citations, and limitations are displayed before confirmation.

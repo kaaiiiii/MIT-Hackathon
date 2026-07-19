@@ -89,15 +89,46 @@ class ElevenLabsAgentsIntakeAdapter:
             )
             response.raise_for_status()
             signed_url = response.json().get("signed_url")
-        except (httpx.HTTPError, ValueError) as exc:
+        except httpx.HTTPStatusError as exc:
+            detail = self._safe_error_detail(exc.response)
             raise EstimatorValidationError(
-                "ElevenLabs Agents could not create the intake voice connection"
+                "ElevenLabs Agents could not create the intake voice connection "
+                f"(HTTP {exc.response.status_code}: {detail})"
+            ) from exc
+        except httpx.RequestError as exc:
+            raise EstimatorValidationError(
+                "ElevenLabs Agents could not reach the signed-URL service "
+                f"({exc.__class__.__name__}: {exc})"
+            ) from exc
+        except ValueError as exc:
+            raise EstimatorValidationError(
+                "ElevenLabs Agents returned an invalid signed-URL response"
             ) from exc
         if not isinstance(signed_url, str) or not signed_url.startswith("wss://"):
             raise EstimatorValidationError(
                 "ElevenLabs Agents returned an invalid connection URL"
             )
         return "elevenlabs_agents", signed_url
+
+    @staticmethod
+    def _safe_error_detail(response: httpx.Response) -> str:
+        """Return useful ElevenLabs diagnostics without echoing credentials."""
+        try:
+            payload = response.json()
+        except ValueError:
+            return "upstream request failed"
+
+        detail = payload.get("detail") if isinstance(payload, dict) else None
+        if isinstance(detail, dict):
+            values = [
+                detail.get("code"),
+                detail.get("message"),
+                f"request_id={detail['request_id']}" if detail.get("request_id") else None,
+            ]
+            return "; ".join(str(value) for value in values if value)
+        if isinstance(detail, str) and detail.strip():
+            return detail.strip()
+        return "upstream request failed"
 
     async def close(self) -> None:
         if self._owns_client:
