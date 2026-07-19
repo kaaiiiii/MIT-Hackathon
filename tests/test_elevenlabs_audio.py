@@ -49,3 +49,35 @@ async def test_elevenlabs_audio_adapter_uses_scribe_and_tts_contracts():
     assert speech.media_type == "audio/mpeg"
     assert len(requests) == 2
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_audio_adapter_streams_speech_chunks():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/text-to-speech/voice-123/stream")
+        assert request.url.params["output_format"] == "mp3_44100_128"
+        assert request.url.params["optimize_streaming_latency"] == "3"
+        payload = json.loads((await request.aread()).decode())
+        assert payload == {
+            "text": "What does that include?",
+            "model_id": "eleven_flash_v2_5",
+        }
+        return httpx.Response(200, content=b"chunked-fake-mp3")
+
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        headers={"xi-api-key": "test-key"},
+    )
+    adapter = ElevenLabsAudioAdapter(
+        api_key="test-key",
+        voice_id="voice-123",
+        client=client,
+    )
+
+    chunks = [
+        chunk
+        async for chunk in adapter.synthesize_stream("What does that include?")
+    ]
+
+    assert b"".join(chunks) == b"chunked-fake-mp3"
+    await client.aclose()

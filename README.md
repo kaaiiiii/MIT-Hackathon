@@ -121,6 +121,10 @@ confidence, and voice-turn/document-region/catalog reference before the call sta
   ElevenLabs, Twilio, or SIP is connected.
 - The local demo supports microphone audio -> ElevenLabs Scribe v2 -> GPT-5.4 ->
   ElevenLabs Flash v2.5 -> browser audio playback.
+- Voice turns are latency-optimized: recording auto-sends after a short pause,
+  the turn JSON returns as soon as GPT answers (`?tts=stream`), and speech is
+  streamed from `GET /api/v1/demo/voice/sessions/{call_id}/speech` so playback
+  starts on the first audio chunk. The fixed greeting audio is cached.
 
 The challenge-level product constraints are recorded in
 [`docs/PRODUCT_CONTEXT.md`](docs/PRODUCT_CONTEXT.md).

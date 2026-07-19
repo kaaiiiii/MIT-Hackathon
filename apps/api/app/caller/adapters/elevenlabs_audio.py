@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import quote
 
@@ -20,6 +21,7 @@ class ElevenLabsAudioAdapter:
         stt_model: str = "scribe_v2",
         tts_model: str = "eleven_flash_v2_5",
         output_format: str = "mp3_44100_128",
+        stream_latency: int = 3,
         base_url: str = "https://api.elevenlabs.io/v1",
         client: httpx.AsyncClient | None = None,
     ) -> None:
@@ -31,6 +33,7 @@ class ElevenLabsAudioAdapter:
         self.stt_model = stt_model
         self.tts_model = tts_model
         self.output_format = output_format
+        self.stream_latency = stream_latency
         self.base_url = base_url.rstrip("/")
         self._owns_client = client is None
         self.client = client or httpx.AsyncClient(
@@ -85,6 +88,30 @@ class ElevenLabsAudioAdapter:
         if not response.content:
             raise ExternalServiceError("ElevenLabs returned empty speech audio.")
         return SynthesizedAudio(content=response.content, media_type="audio/mpeg")
+
+    async def synthesize_stream(self, text: str) -> AsyncIterator[bytes]:
+        """Yield speech chunks as ElevenLabs renders them, for progressive playback."""
+        if not text.strip():
+            raise ExternalServiceError("Cannot synthesize an empty buyer response.")
+        safe_voice_id = quote(self.voice_id, safe="")
+        try:
+            async with self.client.stream(
+                "POST",
+                f"{self.base_url}/text-to-speech/{safe_voice_id}/stream",
+                params={
+                    "output_format": self.output_format,
+                    "optimize_streaming_latency": self.stream_latency,
+                },
+                json={"text": text, "model_id": self.tts_model},
+            ) as response:
+                response.raise_for_status()
+                async for chunk in response.aiter_bytes():
+                    if chunk:
+                        yield chunk
+        except httpx.HTTPError as exc:
+            raise ExternalServiceError(
+                "ElevenLabs could not stream the buyer voice."
+            ) from exc
 
     async def close(self) -> None:
         if self._owns_client:

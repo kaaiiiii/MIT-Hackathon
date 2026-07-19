@@ -30,7 +30,8 @@ const requestedJobSpecVersionId = new URLSearchParams(window.location.search).ge
 );
 
 let callId = null;
-let lastAudio = null;
+let lastAudioEl = null;
+let lastReplayUrl = null;
 let isBusy = false;
 let mediaRecorder = null;
 let microphoneStream = null;
@@ -38,6 +39,8 @@ let audioChunks = [];
 let connectedEstimatorSpec = null;
 let jobEvidenceCount = 0;
 let quoteEvidenceCount = 0;
+let vadContext = null;
+let vadTimer = null;
 
 const stateOrder = [
   "disclosure",
@@ -75,15 +78,88 @@ const suggestedReplies = {
   summary_confirmation: ["Yes, that's correct.", "No, the total should be $500."],
 };
 
-function playVoice(data) {
-  lastAudio = `data:${data.audio_content_type};base64,${data.audio_base64}`;
+function reportAutoplayBlocked() {
+  recordingStatus.textContent = "Voice is ready. Select Replay buyer voice to hear it.";
+}
+
+function rememberForReplay(chunks) {
+  if (lastReplayUrl) URL.revokeObjectURL(lastReplayUrl);
+  lastReplayUrl = URL.createObjectURL(new Blob(chunks, { type: "audio/mpeg" }));
   replayButton.disabled = false;
-  new Audio(lastAudio).play().catch(() => {
-    recordingStatus.textContent = "Voice is ready. Select Replay buyer voice to hear it.";
+}
+
+function appendToSourceBuffer(sourceBuffer, chunk) {
+  return new Promise((resolve, reject) => {
+    sourceBuffer.addEventListener("updateend", resolve, { once: true });
+    sourceBuffer.addEventListener("error", reject, { once: true });
+    sourceBuffer.appendBuffer(chunk);
   });
 }
 
-replayButton.addEventListener("click", () => lastAudio && new Audio(lastAudio).play());
+// The speech endpoint is a chunked stream without Range support, which a plain
+// <audio src> can abort mid-utterance. Consume it with fetch instead: feed
+// MediaSource as chunks arrive when the browser supports MP3 MSE, otherwise
+// download fully and play the blob.
+async function playVoice(data) {
+  if (!data.audio_url) {
+    if (!data.audio_base64) return;
+    lastAudioEl = new Audio(`data:${data.audio_content_type};base64,${data.audio_base64}`);
+    replayButton.disabled = false;
+    lastAudioEl.play().catch(reportAutoplayBlocked);
+    return;
+  }
+
+  try {
+    const response = await fetch(data.audio_url);
+    if (!response.ok || !response.body) throw new Error(`Speech request failed (${response.status})`);
+    const reader = response.body.getReader();
+    const chunks = [];
+    const canStream = "MediaSource" in window && MediaSource.isTypeSupported("audio/mpeg");
+
+    if (!canStream) {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+      rememberForReplay(chunks);
+      lastAudioEl = new Audio(lastReplayUrl);
+      lastAudioEl.play().catch(reportAutoplayBlocked);
+      return;
+    }
+
+    const mediaSource = new MediaSource();
+    const mediaUrl = URL.createObjectURL(mediaSource);
+    lastAudioEl = new Audio(mediaUrl);
+    await new Promise((resolve) => {
+      mediaSource.addEventListener("sourceopen", resolve, { once: true });
+    });
+    const sourceBuffer = mediaSource.addSourceBuffer("audio/mpeg");
+    lastAudioEl.play().catch(reportAutoplayBlocked);
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+      await appendToSourceBuffer(sourceBuffer, value);
+    }
+    if (mediaSource.readyState === "open") mediaSource.endOfStream();
+    URL.revokeObjectURL(mediaUrl);
+    rememberForReplay(chunks);
+  } catch (error) {
+    recordingStatus.textContent = `Buyer voice failed: ${error.message}`;
+  }
+}
+
+replayButton.addEventListener("click", () => {
+  if (!lastReplayUrl) {
+    if (!lastAudioEl) return;
+    lastAudioEl.currentTime = 0;
+    lastAudioEl.play();
+    return;
+  }
+  lastAudioEl = new Audio(lastReplayUrl);
+  lastAudioEl.play();
+});
 
 async function api(path, options = {}) {
   const headers = options.body instanceof FormData
@@ -116,7 +192,7 @@ startButton.addEventListener("click", async () => {
             evidence_reference: "demo://user-confirmed-competing-bid",
       };
     }
-    const data = await api("/api/v1/demo/voice/sessions", {
+    const data = await api("/api/v1/demo/voice/sessions?tts=stream", {
       method: "POST",
       body: JSON.stringify(payload),
     });
@@ -139,7 +215,7 @@ form.addEventListener("submit", async (event) => {
   setBusy(true);
   input.value = "";
   try {
-    const data = await api(`/api/v1/demo/voice/sessions/${callId}/text`, {
+    const data = await api(`/api/v1/demo/voice/sessions/${callId}/text?tts=stream`, {
       method: "POST",
       body: JSON.stringify({ text }),
     });
@@ -154,13 +230,60 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
+// Auto-send after a pause so the vendor never has to click stop mid-conversation.
+const VAD_INTERVAL_MS = 100;
+const VAD_SILENCE_RMS = 0.012;
+const VAD_MIN_SPEECH_MS = 400;
+const VAD_SILENCE_HOLD_MS = 1400;
+
+function startSilenceWatch(stream) {
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  if (!AudioContextClass) return;
+  vadContext = new AudioContextClass();
+  const analyser = vadContext.createAnalyser();
+  analyser.fftSize = 2048;
+  vadContext.createMediaStreamSource(stream).connect(analyser);
+  const samples = new Float32Array(analyser.fftSize);
+  let speechMs = 0;
+  let silenceMs = 0;
+  vadTimer = setInterval(() => {
+    analyser.getFloatTimeDomainData(samples);
+    let sum = 0;
+    for (let i = 0; i < samples.length; i += 1) sum += samples[i] * samples[i];
+    const rms = Math.sqrt(sum / samples.length);
+    if (rms >= VAD_SILENCE_RMS) {
+      speechMs += VAD_INTERVAL_MS;
+      silenceMs = 0;
+    } else if (speechMs >= VAD_MIN_SPEECH_MS) {
+      silenceMs += VAD_INTERVAL_MS;
+    }
+    if (speechMs >= VAD_MIN_SPEECH_MS && silenceMs >= VAD_SILENCE_HOLD_MS) {
+      stopRecording("Pause detected — sending to the buyer agent…");
+    }
+  }, VAD_INTERVAL_MS);
+}
+
+function stopSilenceWatch() {
+  if (vadTimer) {
+    clearInterval(vadTimer);
+    vadTimer = null;
+  }
+  vadContext?.close().catch(() => {});
+  vadContext = null;
+}
+
+function stopRecording(statusMessage) {
+  stopSilenceWatch();
+  if (mediaRecorder?.state === "recording") mediaRecorder.stop();
+  recordButton.classList.remove("recording");
+  recordLabel.textContent = "Record vendor reply";
+  recordingStatus.textContent = statusMessage;
+}
+
 recordButton.addEventListener("click", async () => {
   if (!callId || isBusy) return;
   if (mediaRecorder?.state === "recording") {
-    mediaRecorder.stop();
-    recordButton.classList.remove("recording");
-    recordLabel.textContent = "Record vendor reply";
-    recordingStatus.textContent = "Processing speech with ElevenLabs Scribe v2…";
+    stopRecording("Processing speech with ElevenLabs Scribe v2…");
     return;
   }
 
@@ -174,10 +297,11 @@ recordButton.addEventListener("click", async () => {
       if (event.data.size) audioChunks.push(event.data);
     });
     mediaRecorder.addEventListener("stop", submitRecording, { once: true });
-    mediaRecorder.start();
+    mediaRecorder.start(250);
+    startSilenceWatch(microphoneStream);
     recordButton.classList.add("recording");
     recordLabel.textContent = "Stop and send";
-    recordingStatus.textContent = "Recording… speak as the vendor, then stop.";
+    recordingStatus.textContent = "Recording… pause briefly to auto-send, or press stop.";
   } catch (error) {
     showError(`Microphone unavailable: ${error.message}`);
   }
@@ -198,7 +322,7 @@ async function submitRecording() {
   try {
     const formData = new FormData();
     formData.append("audio", blob, mimeType.includes("webm") ? "vendor.webm" : "vendor-audio");
-    const data = await api(`/api/v1/demo/voice/sessions/${callId}/messages`, {
+    const data = await api(`/api/v1/demo/voice/sessions/${callId}/messages?tts=stream`, {
       method: "POST",
       body: formData,
     });

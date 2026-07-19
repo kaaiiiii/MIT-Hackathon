@@ -3,14 +3,16 @@ from __future__ import annotations
 import base64
 from time import perf_counter
 from datetime import UTC, datetime
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import APIRouter, File, UploadFile
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .audio import AudioPipelineAdapter
 from .dialogue_planner import DialogueAction
-from .errors import ConflictError, ExternalServiceError
+from .errors import ConflictError, ExternalServiceError, NotFoundError
 from .orchestrator import CallOrchestrator
 from .openai_agent import BuyerTurnDecision, BuyerTurnModel
 from .schemas import (
@@ -50,6 +52,8 @@ DEMO_VENDOR = VendorTarget(
     metadata={"purpose": "text-in/voice-out demo"},
 )
 
+TtsMode = Literal["inline", "stream"]
+
 
 class DemoMessageRequest(BaseModel):
     text: str = Field(min_length=1, max_length=2000)
@@ -70,8 +74,9 @@ class DemoTurnResponse(BaseModel):
 
 class DemoVoiceTurnResponse(DemoTurnResponse):
     transcription: str | None = None
-    audio_base64: str
-    audio_content_type: str
+    audio_base64: str = ""
+    audio_content_type: str = "audio/mpeg"
+    audio_url: str | None = None
     audio_provider: str = "elevenlabs"
     pipeline_timings_ms: dict[str, float] = Field(default_factory=dict)
 
@@ -88,13 +93,17 @@ class VoiceTurnPipeline:
         self.audio_adapter = audio_adapter
 
     async def start(
-        self, request: DemoStartRequest | None = None
+        self,
+        request: DemoStartRequest | None = None,
+        *,
+        include_audio: bool = True,
     ) -> DemoVoiceTurnResponse:
         started = perf_counter()
         turn = await self.simulator.start(request)
         return await self._with_audio(
             turn,
             timings={"caller": self._elapsed_ms(started)},
+            include_audio=include_audio,
         )
 
     async def receive_audio(
@@ -104,6 +113,7 @@ class VoiceTurnPipeline:
         *,
         filename: str,
         media_type: str,
+        include_audio: bool = True,
     ) -> DemoVoiceTurnResponse:
         started = perf_counter()
         transcription = await self.audio_adapter.transcribe(
@@ -119,10 +129,11 @@ class VoiceTurnPipeline:
             turn,
             transcription=transcription,
             timings={"speech_to_text": stt_ms, "gpt_and_caller": caller_ms},
+            include_audio=include_audio,
         )
 
     async def receive_text(
-        self, call_id: str, text: str
+        self, call_id: str, text: str, *, include_audio: bool = True
     ) -> DemoVoiceTurnResponse:
         started = perf_counter()
         turn = await self.simulator.receive(call_id, text)
@@ -130,6 +141,26 @@ class VoiceTurnPipeline:
             turn,
             transcription=text,
             timings={"gpt_and_caller": self._elapsed_ms(started)},
+            include_audio=include_audio,
+        )
+
+    async def speech_response(self, call_id: str) -> Response:
+        """Stream the latest agent message as speech so playback starts immediately."""
+        view = self.simulator.orchestrator.get_call_view(call_id)
+        text = next(
+            (
+                event.text
+                for event in reversed(view.transcript)
+                if event.speaker == "agent"
+            ),
+            None,
+        )
+        if text is None:
+            raise NotFoundError("The call has no agent message to speak yet.")
+        return StreamingResponse(
+            self.audio_adapter.synthesize_stream(text),
+            media_type="audio/mpeg",
+            headers={"cache-control": "no-store", "accept-ranges": "none"},
         )
 
     async def _with_audio(
@@ -138,7 +169,24 @@ class VoiceTurnPipeline:
         *,
         transcription: str | None = None,
         timings: dict[str, float] | None = None,
+        include_audio: bool = True,
     ) -> DemoVoiceTurnResponse:
+        if not include_audio:
+            call_id = turn.call.call.call_id
+            agent_turns = sum(
+                1 for event in turn.call.transcript if event.speaker == "agent"
+            )
+            completed_timings = dict(timings or {})
+            completed_timings["total"] = round(sum(completed_timings.values()), 1)
+            return DemoVoiceTurnResponse(
+                **turn.model_dump(),
+                transcription=transcription,
+                audio_url=(
+                    f"/api/v1/demo/voice/sessions/{call_id}/speech"
+                    f"?turn={agent_turns}"
+                ),
+                pipeline_timings_ms=completed_timings,
+            )
         started = perf_counter()
         speech = await self.audio_adapter.synthesize(turn.agent_message)
         completed_timings = dict(timings or {})
@@ -484,19 +532,26 @@ def build_demo_router(
     ) -> DemoTurnResponse:
         return await simulator.receive(call_id, request.text)
 
+    pipeline = (
+        VoiceTurnPipeline(simulator, audio_adapter)
+        if audio_adapter is not None
+        else None
+    )
+
     def voice_pipeline() -> VoiceTurnPipeline:
-        if audio_adapter is None:
+        if pipeline is None:
             raise ExternalServiceError(
                 "ElevenLabs voice is not configured. Set ELEVENLABS_API_KEY and "
                 "ELEVENLABS_VOICE_ID, then restart the API."
             )
-        return VoiceTurnPipeline(simulator, audio_adapter)
+        return pipeline
 
     @router.post("/voice/sessions", response_model=DemoVoiceTurnResponse)
     async def start_voice_session(
         request: DemoStartRequest | None = None,
+        tts: TtsMode = "inline",
     ) -> DemoVoiceTurnResponse:
-        return await voice_pipeline().start(request)
+        return await voice_pipeline().start(request, include_audio=tts == "inline")
 
     @router.post(
         "/voice/sessions/{call_id}/messages",
@@ -505,6 +560,7 @@ def build_demo_router(
     async def send_voice_message(
         call_id: str,
         audio: UploadFile = File(...),
+        tts: TtsMode = "inline",
     ) -> DemoVoiceTurnResponse:
         content = await audio.read()
         if len(content) > 25 * 1024 * 1024:
@@ -514,6 +570,7 @@ def build_demo_router(
             content,
             filename=audio.filename or "vendor-recording.webm",
             media_type=audio.content_type or "application/octet-stream",
+            include_audio=tts == "inline",
         )
 
     @router.post(
@@ -521,8 +578,16 @@ def build_demo_router(
         response_model=DemoVoiceTurnResponse,
     )
     async def send_voice_text(
-        call_id: str, request: DemoMessageRequest
+        call_id: str,
+        request: DemoMessageRequest,
+        tts: TtsMode = "inline",
     ) -> DemoVoiceTurnResponse:
-        return await voice_pipeline().receive_text(call_id, request.text)
+        return await voice_pipeline().receive_text(
+            call_id, request.text, include_audio=tts == "inline"
+        )
+
+    @router.get("/voice/sessions/{call_id}/speech")
+    async def stream_voice_speech(call_id: str, turn: int | None = None) -> Response:
+        return await voice_pipeline().speech_response(call_id)
 
     return router

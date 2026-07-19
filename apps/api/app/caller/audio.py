@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -22,5 +23,7 @@ class AudioPipelineAdapter(Protocol):
     ) -> str: ...
 
     async def synthesize(self, text: str) -> SynthesizedAudio: ...
+
+    def synthesize_stream(self, text: str) -> AsyncIterator[bytes]: ...
 
     async def close(self) -> None: ...

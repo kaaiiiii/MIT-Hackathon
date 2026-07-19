@@ -206,6 +206,7 @@ class FakeAudioAdapter:
     def __init__(self):
         self.transcriptions = ["Yes, I can discuss it."]
         self.synthesized: list[str] = []
+        self.streamed: list[str] = []
 
     async def transcribe(self, audio, *, filename, media_type):
         assert audio == b"recorded-vendor-audio"
@@ -216,6 +217,11 @@ class FakeAudioAdapter:
     async def synthesize(self, text):
         self.synthesized.append(text)
         return SynthesizedAudio(b"generated-buyer-mp3", "audio/mpeg")
+
+    async def synthesize_stream(self, text):
+        self.streamed.append(text)
+        yield b"streamed-"
+        yield b"buyer-mp3"
 
     async def close(self):
         pass
@@ -402,6 +408,43 @@ def test_voice_pipeline_transcribes_runs_turn_and_synthesizes(tmp_path):
         assert body["call"]["transcript"][-2]["text"] == "Yes, I can discuss it."
         assert body["audio_base64"]
         assert len(audio.synthesized) == 2
+
+
+def test_voice_stream_mode_defers_tts_and_streams_speech(tmp_path):
+    audio = FakeAudioAdapter()
+    app = create_app(
+        database_path=str(tmp_path / "voice-stream.db"),
+        buyer_model=FakeBuyerModel(),
+        audio_adapter=audio,
+    )
+    with TestClient(app) as client:
+        started = client.post("/api/v1/demo/voice/sessions?tts=stream")
+        assert started.status_code == 200, started.text
+        body = started.json()
+        call_id = body["call"]["call"]["call_id"]
+        assert body["audio_base64"] == ""
+        assert body["audio_url"].startswith(
+            f"/api/v1/demo/voice/sessions/{call_id}/speech"
+        )
+        assert audio.synthesized == []
+
+        greeting = client.get(body["audio_url"])
+        assert greeting.status_code == 200
+        assert greeting.content == b"generated-buyer-mp3"
+        assert greeting.headers["content-type"].startswith("audio/mpeg")
+
+        # The fixed greeting is cached after the first synthesis.
+        client.get(body["audio_url"])
+        assert len(audio.synthesized) == 1
+
+        turn = client.post(
+            f"/api/v1/demo/voice/sessions/{call_id}/text?tts=stream",
+            json={"text": "Sure, go ahead with the details."},
+        ).json()
+        speech = client.get(turn["audio_url"])
+        assert speech.status_code == 200
+        assert speech.content == b"streamed-buyer-mp3"
+        assert audio.streamed == [turn["agent_message"]]
 
 
 def test_voice_endpoint_explains_missing_elevenlabs_configuration(tmp_path):
