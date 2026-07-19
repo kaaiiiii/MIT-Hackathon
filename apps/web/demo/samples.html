@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Record sample agency calls and synthesize the rest for testing"
+    />
+    <title>Sample Calls — Agency quote recorder</title>
+    <link rel="stylesheet" href="/demo/styles.css" />
+    <style>
+      .samples-shell { max-width: 880px; margin: 0 auto; padding: 0 1rem 3rem; }
+      .samples-setup { display: flex; flex-wrap: wrap; align-items: end; gap: 1rem; margin: 1.5rem 0; }
+      .samples-setup label { display: flex; flex-direction: column; gap: 0.35rem; font-weight: 600; }
+      .samples-setup input { width: 7rem; padding: 0.55rem 0.7rem; border-radius: 10px; border: 1px solid rgba(120,120,140,0.4); font-size: 1rem; }
+      .cap-note { flex-basis: 100%; font-size: 0.9rem; opacity: 0.85; }
+      .cap-note.warn { color: #b4540a; font-weight: 600; }
+      .sample-progress { display: flex; gap: 1rem; align-items: center; margin: 1rem 0; font-weight: 600; }
+      .sample-grid { display: grid; gap: 0.9rem; margin-top: 1rem; }
+      .sample-card { border: 1px solid rgba(120,120,140,0.25); border-radius: 14px; padding: 0.9rem 1rem; display: grid; gap: 0.5rem; }
+      .sample-card header { display: flex; justify-content: space-between; align-items: center; gap: 0.6rem; }
+      .sample-card .tag { font-size: 0.72rem; letter-spacing: 0.06em; padding: 0.2rem 0.55rem; border-radius: 999px; background: rgba(80,120,255,0.15); }
+      .sample-card .tag.synthetic { background: rgba(150,80,255,0.16); }
+      .sample-card p { margin: 0; line-height: 1.45; }
+      .sample-card audio { width: 100%; }
+      .record-panel { display: grid; gap: 0.7rem; border: 1px dashed rgba(120,120,140,0.45); border-radius: 14px; padding: 1rem; margin-top: 1rem; }
+      .record-panel .row { display: flex; flex-wrap: wrap; gap: 0.7rem; align-items: center; }
+      .record-panel input[type="text"] { flex: 1; min-width: 12rem; padding: 0.55rem 0.7rem; border-radius: 10px; border: 1px solid rgba(120,120,140,0.4); font-size: 0.95rem; }
+      .samples-actions { display: flex; flex-wrap: wrap; gap: 0.8rem; margin-top: 1.2rem; }
+      .status-line { min-height: 1.4rem; margin-top: 0.6rem; font-size: 0.95rem; }
+      .status-line.error { color: #c22f2f; font-weight: 600; }
+      .hidden { display: none !important; }
+    </style>
+  </head>
+  <body>
+    <div class="shell samples-shell">
+      <header class="topbar">
+        <a class="brand" href="/demo/samples.html" aria-label="Sample Calls home">
+          <span class="brand-mark">S</span>
+          <span>
+            <strong>Sample Calls</strong>
+            <small>Agency quote recorder</small>
+          </span>
+        </a>
+        <div class="voice-controls">
+          <a class="icon-button" href="/demo/">Caller Lab</a>
+          <a class="icon-button" href="/demo/estimator.html">Estimator Lab</a>
+        </div>
+      </header>
+
+      <main>
+        <section class="hero">
+          <div>
+            <span class="eyebrow">TEST FIXTURES</span>
+            <h1>Record sample calls.<br /><em>We synthesize the rest.</em></h1>
+            <p>
+              Play the role of a moving agency giving a quote over the phone.
+              Record a few examples yourself; the remaining quotes are generated
+              synthetically in the same style, with distinct agencies, prices,
+              and terms.
+            </p>
+          </div>
+        </section>
+
+        <section class="samples-setup" id="setup-panel">
+          <label for="quote-count">
+            Number of sample quotes
+            <input id="quote-count" type="number" min="1" max="20" value="5" />
+          </label>
+          <button id="start-session" class="primary-button" type="button">
+            <span>Start collecting</span>
+            <span aria-hidden="true">→</span>
+          </button>
+          <span id="cap-note" class="cap-note">
+            Default is 5 quotes. You can request up to 20 from the website.
+          </span>
+        </section>
+
+        <section id="collection-panel" class="hidden">
+          <div class="sample-progress">
+            <span id="progress-text">0 of 5 collected</span>
+            <span id="session-label" class="count-badge"></span>
+          </div>
+
+          <div class="record-panel">
+            <strong>Record yourself as an agency</strong>
+            <p>
+              Suggested script: greet the caller, name your agency, quote the
+              moving job (flat or hourly), mention any fees, whether the price
+              is binding, and your availability.
+            </p>
+            <div class="row">
+              <input
+                id="agency-name"
+                type="text"
+                maxlength="80"
+                placeholder="Agency name for this recording (optional)"
+              />
+              <button id="sample-record" class="record-button" type="button">
+                <span class="record-dot"></span>
+                <span id="sample-record-label">Record sample call</span>
+              </button>
+            </div>
+            <span id="sample-status" class="status-line">
+              Speak, then press stop — the recording is transcribed and saved.
+            </span>
+          </div>
+
+          <div class="samples-actions">
+            <button id="synthesize" class="primary-button" type="button" disabled>
+              <span>Generate the remaining quotes synthetically</span>
+            </button>
+            <button id="new-session" class="icon-button" type="button">
+              Start over
+            </button>
+          </div>
+
+          <div id="sample-grid" class="sample-grid"></div>
+        </section>
+      </main>
+
+      <footer>
+        <span>Recordings stay on this machine.</span>
+        <span>STT/TTS: ElevenLabs · Synthetic quotes: GPT.</span>
+      </footer>
+    </div>
+
+    <script type="module" src="/demo/samples.js"></script>
+  </body>
+</html>

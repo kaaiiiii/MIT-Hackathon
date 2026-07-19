@@ -61,6 +61,9 @@ from .research.persistence import SQLiteResearchStore
 from .research.router import build_research_router
 from .research.service import CallerResearchContextProvider, ResearchService
 from .reporting.router import build_reporting_router
+from .samples.generator import OpenAISampleQuoteGenerator, SampleQuoteGenerator
+from .samples.persistence import SQLiteSamplesStore
+from .samples.router import SampleCallsService, build_samples_router
 
 
 class SPAStaticFiles(StaticFiles):
@@ -92,6 +95,8 @@ def create_app(
     estimator_conversation_importer: ConversationTranscriptImporter | None = None,
     estimator_transcript_extractor: TranscriptFieldExtractor | None = None,
     context_researcher: ContextResearcher | None = None,
+    sample_generator: SampleQuoteGenerator | None = None,
+    samples_dir: str | None = None,
 ) -> FastAPI:
     store = SQLiteCallerStore(
         database_path or os.getenv("CALLER_DB_PATH", "caller.sqlite3")
@@ -177,6 +182,18 @@ def create_app(
         )
     app.state.demo_buyer_model = buyer_model
     app.state.demo_audio_adapter = audio_adapter
+
+    samples_service = SampleCallsService(
+        SQLiteSamplesStore(store.connection),
+        samples_dir=Path(
+            samples_dir
+            or os.getenv("SAMPLE_CALLS_DIR", "data/sample_calls")
+        ),
+        audio_adapter=audio_adapter,
+        generator=sample_generator or _configured_sample_generator(),
+    )
+    app.state.samples_service = samples_service
+    app.include_router(build_samples_router(samples_service))
 
     demo_directory = Path(__file__).resolve().parents[2] / "web" / "demo"
     app.mount("/demo", StaticFiles(directory=demo_directory, html=True), name="demo")
@@ -279,6 +296,16 @@ def _configured_intake_voice_adapter() -> IntakeVoiceAdapter:
     if api_key and agent_id:
         return ElevenLabsAgentsIntakeAdapter(api_key=api_key, agent_id=agent_id)
     return SimulatedIntakeVoiceAdapter()
+
+
+def _configured_sample_generator() -> SampleQuoteGenerator | None:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    return OpenAISampleQuoteGenerator(
+        api_key=api_key,
+        model=os.getenv("OPENAI_MODEL", "gpt-5.4"),
+    )
 
 
 def _configured_context_researcher() -> ContextResearcher | None:
