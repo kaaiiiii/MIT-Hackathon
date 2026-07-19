@@ -430,12 +430,9 @@ def test_voice_stream_mode_defers_tts_and_streams_speech(tmp_path):
 
         greeting = client.get(body["audio_url"])
         assert greeting.status_code == 200
-        assert greeting.content == b"generated-buyer-mp3"
+        assert greeting.content == b"streamed-buyer-mp3"
         assert greeting.headers["content-type"].startswith("audio/mpeg")
-
-        # The fixed greeting is cached after the first synthesis.
-        client.get(body["audio_url"])
-        assert len(audio.synthesized) == 1
+        assert audio.streamed == [body["agent_message"]]
 
         turn = client.post(
             f"/api/v1/demo/voice/sessions/{call_id}/text?tts=stream",
@@ -444,7 +441,8 @@ def test_voice_stream_mode_defers_tts_and_streams_speech(tmp_path):
         speech = client.get(turn["audio_url"])
         assert speech.status_code == 200
         assert speech.content == b"streamed-buyer-mp3"
-        assert audio.streamed == [turn["agent_message"]]
+        assert audio.streamed[-1] == turn["agent_message"]
+        assert audio.synthesized == []
 
 
 def test_voice_endpoint_explains_missing_elevenlabs_configuration(tmp_path):
