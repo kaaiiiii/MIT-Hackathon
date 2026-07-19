@@ -72,7 +72,7 @@ be an exact substring of its referenced turn or the backend drops it. Imported f
 remain a draft and follow the normal evidence review and explicit-confirmation path.
 
 The extraction model is configured by `OPENAI_ESTIMATOR_MODEL`, falling back to
-`OPENAI_RESEARCH_MODEL` and then `gpt-5.6-luna`. This repair path does not infer
+`OPENAI_RESEARCH_MODEL` and then `gpt-5.6-terra`. This repair path does not infer
 unknowns, use agent questions as evidence, or write directly to `job_spec_versions`.
 
 ## Document parser seam

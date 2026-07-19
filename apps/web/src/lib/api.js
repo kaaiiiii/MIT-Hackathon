@@ -22,6 +22,9 @@ export const createIntakeSession = () =>
     body: JSON.stringify({ vertical: 'moving', benchmark_refs: [] }),
   });
 
+export const getIntakeSession = (sessionId) =>
+  api(`/api/v1/intake/sessions/${encodeURIComponent(sessionId)}`);
+
 export const startVoiceIntake = (sessionId) =>
   api(`/api/v1/intake/sessions/${sessionId}/voice`, { method: 'POST' });
 

@@ -117,17 +117,19 @@ class CallOrchestrator:
         vendor = self.inputs.get_vendor_target(call.vendor_id)
         if vendor is None:
             raise NotFoundError(f"Vendor {call.vendor_id!r} was not found")
+        augmented_context = (
+            await self.context_provider.build_and_snapshot(
+                call.call_id, spec.version_id
+            )
+            if self.context_provider is not None
+            else {}
+        )
         self.states.assert_transition(call.status, CallStatus.CONNECTING)
 
         connecting = call.model_copy(
             update={"status": CallStatus.CONNECTING, "started_at": datetime.now(UTC)}
         )
         self.store.update_call(connecting)
-        augmented_context = (
-            self.context_provider.build_and_snapshot(call.call_id, spec.version_id)
-            if self.context_provider is not None
-            else {}
-        )
         context = CallContext(
             call_id=call.call_id,
             immutable_spec_sha256=call.spec_sha256,

@@ -15,5 +15,6 @@ class DialogueAction(StrEnum):
     REQUEST_CALLBACK_REQUIREMENTS = "request_callback_requirements"
     CLOSE_CALLBACK_REQUIRED = "close_callback_required"
     USE_VERIFIED_LEVERAGE = "use_verified_leverage"
+    REQUEST_CONCESSION = "request_concession"
     CONFIRM_SUMMARY = "confirm_summary"
     CONTINUE = "continue"

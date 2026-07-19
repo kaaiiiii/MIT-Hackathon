@@ -3,8 +3,6 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import './calls.css';
 
-const BUILT_IN_SPEC = 'demo_spec_piano';
-
 // Step 2 of the demo: simulate the vendor calls for a confirmed specification.
 // The working call console (state machine, evidence board, voice loop) lives at
 // /demo/; this tab hosts it against the chosen spec so the whole flow stays in
@@ -28,9 +26,9 @@ export default function Calls() {
     };
   }, []);
 
-  const active = requested ?? specs[0]?.version_id ?? BUILT_IN_SPEC;
+  const active = requested ?? specs[0]?.version_id ?? null;
   const consoleUrl = useMemo(
-    () => `/demo/?job_spec_version_id=${encodeURIComponent(active)}`,
+    () => active ? `/demo/?job_spec_version_id=${encodeURIComponent(active)}` : null,
     [active],
   );
 
@@ -52,12 +50,14 @@ export default function Calls() {
           </label>
           <select
             id="spec-select"
-            value={active}
+            value={active ?? ''}
             onChange={(event) => setParams({ spec: event.target.value })}
+            disabled={!active}
           >
-            {!specs.some((row) => row.version_id === active) && (
+            {!active && <option value="">No confirmed specification</option>}
+            {active && !specs.some((row) => row.version_id === active) && (
               <option value={active}>
-                {active === BUILT_IN_SPEC ? 'Built-in demo job (piano)' : active}
+                {active}
               </option>
             )}
             {specs.map((row) => (
@@ -65,23 +65,30 @@ export default function Calls() {
                 {row.version_id} · {new Date(row.confirmed_at).toLocaleString()}
               </option>
             ))}
-            {active !== BUILT_IN_SPEC && (
-              <option value={BUILT_IN_SPEC}>Built-in demo job (piano)</option>
-            )}
           </select>
-          <Link className="mono calls-page__report" to={`/report?spec=${encodeURIComponent(active)}`}>
-            Continue to the report →
-          </Link>
+          {active && (
+            <Link className="mono calls-page__report" to={`/report?spec=${encodeURIComponent(active)}`}>
+              Continue to the report →
+            </Link>
+          )}
         </div>
       </header>
       {error && <p className="calls-page__error">{error}</p>}
-      <iframe
-        key={consoleUrl}
-        className="calls-page__console"
-        src={consoleUrl}
-        title="Call simulation console"
-        allow="microphone; autoplay"
-      />
+      {consoleUrl ? (
+        <iframe
+          key={consoleUrl}
+          className="calls-page__console"
+          src={consoleUrl}
+          title="Call simulation console"
+          allow="microphone; autoplay"
+        />
+      ) : (
+        <section className="calls-page__empty">
+          <h2>No confirmed job yet</h2>
+          <p>The Caller will not substitute a sample job. Complete and confirm the Estimator intake first.</p>
+          <Link className="btn" to="/">Return to Estimator</Link>
+        </section>
+      )}
     </main>
   );
 }

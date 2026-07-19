@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   captureVoiceEvidence,
   confirmIntake,
   createIntakeSession,
   enrichIntake,
+  getIntakeSession,
   importElevenLabsConversation,
   startVoiceIntake,
 } from '../lib/api';
@@ -68,6 +69,8 @@ function ResearchPreview({ bundle }) {
 }
 
 export default function EstimatorIntake() {
+  const [searchParams] = useSearchParams();
+  const resumeSessionId = searchParams.get('intake_session_id');
   const [session, setSession] = useState(null);
   const [voice, setVoice] = useState(null);
   const [research, setResearch] = useState(null);
@@ -82,6 +85,31 @@ export default function EstimatorIntake() {
   const conversationStartedAt = useRef(null);
   const researchStarted = useRef(false);
   const { loadBackendReport } = useReport();
+
+  useEffect(() => {
+    if (!resumeSessionId || session || confirmed) return;
+    let cancelled = false;
+    setStatus('Loading your saved Estimator draft…');
+    getIntakeSession(resumeSessionId)
+      .then((saved) => {
+        if (cancelled) return;
+        setSession(saved);
+        setVoiceEnded(true);
+        setStatus(
+          saved.missing_required_fields?.length
+            ? `Draft restored. Continue the voice interview for: ${saved.missing_required_fields.join(', ')}.`
+            : 'Draft restored and ready for confirmation.',
+        );
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err.message);
+        setStatus('The saved Estimator draft could not be loaded.');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [resumeSessionId, session, confirmed]);
 
   const confirmMicrophoneAccess = async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -103,7 +131,7 @@ export default function EstimatorIntake() {
   const runResearch = useCallback(async (sessionId) => {
     if (researchStarted.current) return;
     researchStarted.current = true;
-    setStatus('Intake complete. Luna is researching risks and better vendor questions…');
+    setStatus('Intake complete. Terra is searching for risks and better vendor questions…');
     try {
       const bundle = await enrichIntake(sessionId);
       setResearch(bundle);
@@ -253,7 +281,7 @@ export default function EstimatorIntake() {
       setSession(result.session);
       setImportSummary(result);
       setStatus(`Recovered ${result.imported_fields.length} evidence field(s) from the ElevenLabs transcript. Review them before confirmation.`);
-      if (result.session.status === 'awaiting_confirmation') {
+      if (Object.keys(result.session.fields ?? {}).length > 0) {
         void runResearch(result.session.session_id);
       }
     } catch (err) {

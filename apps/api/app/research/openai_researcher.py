@@ -29,7 +29,7 @@ class OpenAIContextResearcher:
         self,
         *,
         api_key: str,
-        model: str = "gpt-5.2",
+        model: str = "gpt-5.6-terra",
         client: AsyncOpenAI | None = None,
     ) -> None:
         self.model_name = model
@@ -39,17 +39,22 @@ class OpenAIContextResearcher:
         effort = "medium"
         instructions = """
 You are the grounded research service for a buyer-side quoting system.
-Research the supplied job deeply using current, authoritative web sources.
+Search current, authoritative web sources for context relevant to the supplied job.
 Identify relevant terminology, operational risks, hidden-fee categories,
 assumptions a vendor must confirm, and concise open questions that could improve
-later vendor calls. For final-report research, reconcile the completed-call record
-with current external context and identify material comparison caveats.
+later vendor calls. Produce conversation_opportunities that the Caller can use from
+the beginning of the conversation. Each opportunity must say whether it is only a
+question to ask or a framing of named, confirmed fields. For final-report research,
+reconcile the completed-call record with current external context and identify
+material comparison caveats.
 
 Hard boundary: the confirmed specification is the only source of customer/job
 facts. Research is contextual guidance, never a replacement for confirmed facts,
 never a vendor quote, and never authorized competing-bid leverage. Do not invent
 missing customer details, vendor prices, or benchmark values. Every external claim
-must list the URL that supports it. State limitations and disagreements plainly.
+must list the URL that supports it. External market prices may be researched for
+context but must not be represented as a vendor offer, binding quote, or approved
+leverage. State limitations and disagreements plainly.
 """.strip()
         try:
             response = await self.client.responses.parse(

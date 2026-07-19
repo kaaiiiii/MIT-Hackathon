@@ -12,11 +12,14 @@ research, Caller, and reporting-context APIs.
    that live path fails, the post-call fallback imports a completed ElevenLabs
    `conversation_id`, verifies its session binding, and uses GPT to recover only
    verbatim user-spoken evidence into the same draft.
-3. When the required field set closes, GPT-5.6 Luna research runs and its summary,
+3. When the required field set closes, GPT-5.6 Terra web search runs and its summary,
    questions, citations, and limitations are displayed before confirmation.
 4. Confirmation stores the immutable `version_id` locally, exposes Caller Lab, and
    enables download of the same immutable Caller-context JSON.
-5. Report loads persisted calls and research for that exact version. **Refresh calls**
+5. Caller Lab opens a signed connection to the dedicated ElevenLabs Caller Agent.
+   The Agent owns the conversation and uses two blocking client tools for silent GPT
+   decision advice and exact buyer-utterance recording.
+6. Report loads persisted calls and research for that exact version. **Refresh calls**
    reloads evidence; **Prepare final report** requires terminal calls and runs the
    fresh pre-report research gate.
 

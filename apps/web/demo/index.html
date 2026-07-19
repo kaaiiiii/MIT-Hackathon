@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="Voice-to-text-to-GPT-to-voice test console for the Nego Caller"
+      content="ElevenLabs conversational Agent test console with GPT decision advice"
     />
     <title>Caller Lab — Voice pipeline</title>
     <link rel="stylesheet" href="/demo/styles.css" />
@@ -25,7 +25,7 @@
           <a class="icon-button" href="/demo/estimator.html">Estimator Lab</a>
           <a class="icon-button" href="/demo/samples.html" target="_blank" rel="noopener">Sample Calls</a>
           <span id="model-badge" class="model-badge">Rule-based</span>
-          <span id="audio-badge" class="audio-badge">ElevenLabs STT + TTS</span>
+          <span id="audio-badge" class="audio-badge">ElevenLabs conversational Agent</span>
         </div>
       </header>
 
@@ -35,8 +35,8 @@
             <span class="eyebrow">LOCAL TEST HARNESS</span>
             <h1>Speak as the vendor.<br /><em>Hear the buyer respond.</em></h1>
             <p>
-              Try the real Caller state machine, transcript evidence, quote draft,
-              and outcome validation—without placing a phone call.
+              ElevenLabs runs the live conversation. GPT silently advises each
+              decision while the Caller stores transcript-backed quote evidence.
             </p>
             <label class="leverage-input" for="competing-bid-total">
               <span>Verified binding competing bid (optional)</span>
@@ -68,9 +68,7 @@
                 <span class="panel-kicker">LIVE CONVERSATION</span>
                 <h2>Vendor line</h2>
               </div>
-              <button id="replay-button" class="icon-button" type="button" disabled>
-                Replay buyer voice
-              </button>
+              <span class="model-badge">GPT decision adviser</span>
             </div>
 
             <div id="empty-state" class="empty-state">
@@ -81,7 +79,9 @@
 
             <div id="transcript" class="transcript" aria-live="polite" hidden></div>
 
-            <form id="message-form" class="composer">
+            <div id="caller-agent-host" class="caller-agent-host"></div>
+
+            <form id="message-form" class="composer" hidden>
               <label for="vendor-message">Speak or type what the vendor says</label>
               <div class="recording-row">
                 <button id="record-button" class="record-button" type="button" disabled>
@@ -158,10 +158,11 @@
 
       <footer>
         <span>Browser test line — the Caller places real calls with agencies.</span>
-        <span>Audio: ElevenLabs Scribe v2 → GPT-5.4 → ElevenLabs Flash v2.5.</span>
+        <span>Conversation: ElevenLabs Agent · decisions and extraction: GPT adviser.</span>
       </footer>
     </div>
 
-    <script type="module" src="/demo/app.js"></script>
+    <script src="https://unpkg.com/@elevenlabs/convai-widget-embed@0.14.11" async type="text/javascript"></script>
+    <script type="module" src="/demo/agent-app.js"></script>
   </body>
 </html>

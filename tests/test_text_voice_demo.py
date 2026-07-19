@@ -355,7 +355,7 @@ def test_demo_page_is_served(tmp_path):
         response = client.get("/demo/")
         assert response.status_code == 200
         assert "Speak as the vendor" in response.text
-        assert "/demo/app.js" in response.text
+        assert "/demo/agent-app.js" in response.text
 
 
 def test_injected_gpt_model_handles_custom_vendor_language(tmp_path):

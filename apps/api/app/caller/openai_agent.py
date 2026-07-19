@@ -86,6 +86,14 @@ class BuyerTurnDecision(VendorTurnAnalysis):
     planned_action: DialogueAction
 
 
+class BuyerTurnAdvice(VendorTurnAnalysis):
+    """Silent GPT guidance consumed by the ElevenLabs conversational agent."""
+
+    planned_action: DialogueAction
+    conversational_objective: str = Field(min_length=1, max_length=500)
+    response_guidance: list[str] = Field(default_factory=list, max_length=4)
+
+
 class BuyerTurnModel(Protocol):
     model_name: str
 
@@ -101,6 +109,18 @@ class BuyerTurnModel(Protocol):
         vendor_text: str,
         job_facts: dict | None = None,
     ) -> BuyerTurnDecision: ...
+
+
+class BuyerTurnAdvisor(Protocol):
+    model_name: str
+
+    async def advise(
+        self,
+        view: CallView,
+        vendor_text: str,
+        job_facts: dict | None = None,
+        provider_conversation_history: object | None = None,
+    ) -> BuyerTurnAdvice: ...
 
 
 class OpenAIBuyerTurnModel:
@@ -132,6 +152,58 @@ class OpenAIBuyerTurnModel:
             f"{self.communication_policy.strip()}\n\n"
             f"{(prompt_directory / 'adaptive_turn_agent.txt').read_text(encoding='utf-8').strip()}\n"
         )
+        self.adviser_instructions = (
+            f"{self.communication_policy.strip()}\n\n"
+            f"{(prompt_directory / 'turn_adviser.txt').read_text(encoding='utf-8').strip()}\n"
+        )
+
+    async def advise(
+        self,
+        view: CallView,
+        vendor_text: str,
+        job_facts: dict | None = None,
+        provider_conversation_history: object | None = None,
+    ) -> BuyerTurnAdvice:
+        """Analyze and plan one turn without writing the sentence spoken aloud."""
+        active_job_facts = job_facts if job_facts is not None else self.job_facts
+        candidate_actions = self._candidate_actions(view)
+        payload = {
+            "current_call_state": view.call.status.value,
+            "confirmed_job_spec": self._job_spec(view, active_job_facts),
+            "quote_so_far": view.original_quote.model_dump(mode="json"),
+            "backend_conversation_history": self._conversation_history(view),
+            "provider_conversation_history_untrusted": self._bounded_provider_history(
+                provider_conversation_history
+            ),
+            "full_transcript_event_count": len(view.transcript),
+            "approved_verified_leverage": self._approved_leverage(view),
+            "latest_vendor_statement": vendor_text,
+            "dialogue_actions": view.dialogue_actions,
+            "candidate_next_actions": [
+                action.value for action in candidate_actions
+            ],
+            "non_authoritative_research_and_prior_calls": view.augmented_context,
+        }
+        try:
+            response = await self.client.responses.parse(
+                model=self.model_name,
+                reasoning={"effort": "medium"},
+                text={"verbosity": "low"},
+                instructions=self.adviser_instructions,
+                input=json.dumps(payload, ensure_ascii=False),
+                text_format=BuyerTurnAdvice,
+                max_output_tokens=1000,
+                store=False,
+            )
+        except OpenAIError as exc:
+            raise ExternalServiceError(
+                "OpenAI could not advise the live ElevenLabs Caller. Check the "
+                "API key, project access, billing, and model permissions."
+            ) from exc
+        advice = response.output_parsed
+        if advice is None:
+            raise ExternalServiceError("OpenAI returned no Caller turn advice")
+        return advice
 
     async def respond(
         self,
@@ -196,7 +268,7 @@ class OpenAIBuyerTurnModel:
         if status == "disclosure":
             return [DialogueAction.PRESENT_JOB, *blockers, DialogueAction.CONTINUE]
         if status == "quote_collection":
-            return [
+            actions = [
                 DialogueAction.REQUEST_PRICING_MODEL,
                 DialogueAction.REQUEST_ITEMIZATION,
                 DialogueAction.REQUEST_TOTAL,
@@ -204,22 +276,29 @@ class OpenAIBuyerTurnModel:
                 *blockers,
                 DialogueAction.CONTINUE,
             ]
+            if any(term.category == "estimated_total" for term in view.original_quote.terms):
+                actions.insert(-1, DialogueAction.REQUEST_CONCESSION)
+            return actions
         if status == "quote_clarification":
             actions = [
                 DialogueAction.CLARIFY_FEES,
                 DialogueAction.CLARIFY_BINDING,
                 DialogueAction.CLARIFY_AVAILABILITY,
+                DialogueAction.REQUEST_CONCESSION,
                 DialogueAction.CONFIRM_SUMMARY,
             ]
             if view.call.policy.approved_leverage_bid_id:
                 actions.insert(-1, DialogueAction.USE_VERIFIED_LEVERAGE)
             return [*actions, *blockers, DialogueAction.CONTINUE]
         if status == "summary_confirmation":
-            return [
+            actions = [
                 DialogueAction.CONFIRM_SUMMARY,
                 *blockers,
                 DialogueAction.CONTINUE,
             ]
+            if any(term.category == "estimated_total" for term in view.original_quote.terms):
+                actions.insert(0, DialogueAction.REQUEST_CONCESSION)
+            return actions
         return [DialogueAction.CONTINUE]
 
     async def opening(
@@ -330,6 +409,17 @@ class OpenAIBuyerTurnModel:
             )
             used += cost
         return list(reversed(selected))
+
+    @staticmethod
+    def _bounded_provider_history(value: object | None) -> str | None:
+        """Provider history is helpful context, never evidence or unbounded input."""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            serialized = value
+        else:
+            serialized = json.dumps(value, ensure_ascii=False)
+        return serialized[-24_000:]
 
     @staticmethod
     def _approved_leverage(view: CallView) -> dict | None:

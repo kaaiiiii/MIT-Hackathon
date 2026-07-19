@@ -32,6 +32,7 @@ from .schemas import (
     IntakeSessionCreate,
     IntakeSessionView,
     IntakeStatus,
+    UnknownAcknowledgementRequest,
     VoiceTurnRequest,
     VoiceTurnResponse,
 )
@@ -498,6 +499,44 @@ class EstimatorService:
             confirmed_by=request.confirmed_by,
             canonical_hash=canonical_hash,
         )
+
+    def acknowledge_unknowns(
+        self, session_id: str, request: UnknownAcknowledgementRequest
+    ) -> IntakeSessionView:
+        """Record explicit user acknowledgement for facts they cannot provide."""
+        row = self._assert_draft_mutable(session_id)
+        config = self.configs.load(row["vertical"])
+        required = set(config.required_fields)
+        selected = self.store.selected_evidence(session_id)
+        unknown_fields = set(request.field_names)
+        invalid = unknown_fields - required
+        if invalid:
+            raise EstimatorValidationError(
+                "Only required fields may be acknowledged unknown: "
+                + ", ".join(sorted(invalid))
+            )
+        now = datetime.now(UTC)
+        for field_name in sorted(unknown_fields):
+            if field_name in selected and selected[field_name].value != "unknown":
+                raise EstimatorValidationError(
+                    f"Field {field_name!r} already has an evidenced value"
+                )
+            evidence = EvidencedField(
+                value="unknown",
+                source=EvidenceSource(
+                    modality=EvidenceModality.USER_CONFIRMATION,
+                    reference={
+                        "confirmed_by": request.confirmed_by,
+                        "acknowledgement": "User explicitly acknowledged this field is unknown.",
+                    },
+                    captured_at=now,
+                ),
+                confidence=FieldConfidence.UNKNOWN,
+                unknown_acknowledged=True,
+            )
+            self.store.add_evidence(session_id, field_name, evidence)
+        self._recalculate_status(session_id, config)
+        return self.get_session(session_id)
 
     def _voice_response(
         self, session_id: str, *, disclosure: str | None = None

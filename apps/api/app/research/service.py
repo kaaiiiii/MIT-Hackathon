@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -24,6 +25,7 @@ class ResearchService:
         self.store = store
         self.researcher = researcher
         self.estimator_service = estimator_service
+        self._pre_call_locks: dict[str, asyncio.Lock] = {}
 
     def _require_researcher(self) -> ContextResearcher:
         if self.researcher is None:
@@ -50,7 +52,7 @@ class ResearchService:
             "unresolved_or_missing_fields": view.missing_required_fields,
             "voice_transcript": self.store.voice_turns(session_id),
             "instruction": (
-                "Extend context around this job as deeply as reliable sources allow. "
+                "Search for reliable current context relevant to this job. "
                 "Keep possible facts and questions separate from evidenced job facts."
             ),
         }
@@ -65,6 +67,40 @@ class ResearchService:
             artifact=result.artifact,
             provider_response_id=result.response_id,
         )
+
+    async def ensure_pre_call_research(
+        self, version_id: str
+    ) -> ResearchBundle | None:
+        """Ensure a confirmed Estimator spec has research before its first call.
+
+        Explicit intake research remains the fastest path. This lazy gate covers
+        post-call ElevenLabs transcript recovery and API clients that confirm a spec
+        without visiting the browser's research panel.
+        """
+        existing = self.store.latest_for_spec(
+            version_id, ResearchStage.ESTIMATOR_ENRICHMENT
+        )
+        if existing is not None or self.researcher is None:
+            return existing
+
+        lock = self._pre_call_locks.setdefault(version_id, asyncio.Lock())
+        async with lock:
+            existing = self.store.latest_for_spec(
+                version_id, ResearchStage.ESTIMATOR_ENRICHMENT
+            )
+            if existing is not None:
+                return existing
+            row = self.store.connection.execute(
+                """
+                SELECT source_session_id
+                FROM estimator_confirmed_specs
+                WHERE version_id = ?
+                """,
+                (version_id,),
+            ).fetchone()
+            if row is None or not row["source_session_id"]:
+                return None
+            return await self.enrich_intake(row["source_session_id"])
 
     async def final_research(
         self, version_id: str, call_ids: list[str] | None = None
@@ -102,7 +138,7 @@ class ResearchService:
             ),
             "completed_call_records": selected,
             "instruction": (
-                "Perform a fresh, current, deep web research pass for report context. "
+                "Perform a fresh, current web search for report context. "
                 "Do not rank vendors or turn contextual research into quote evidence."
             ),
         }
@@ -250,21 +286,39 @@ class CallerResearchContextProvider:
     def __init__(self, service: ResearchService) -> None:
         self.service = service
 
-    def build_and_snapshot(self, call_id: str, version_id: str) -> dict:
-        initial = self.service.store.latest_for_spec(
-            version_id, ResearchStage.ESTIMATOR_ENRICHMENT
-        )
+    async def build_and_snapshot(self, call_id: str, version_id: str) -> dict:
+        initial = await self.service.ensure_pre_call_research(version_id)
         prior_calls = self.service.completed_calls(
             version_id, exclude_call_id=call_id
         )[-8:]
+        artifact = initial.artifact if initial else None
         context = {
+            "pre_call_brief": (
+                {
+                    "topic_summary": artifact.topic_summary,
+                    "terminology": artifact.terminology,
+                    "risk_factors": artifact.risk_factors,
+                    "likely_fee_categories": artifact.likely_fee_categories,
+                    "assumptions_to_verify": artifact.assumptions_to_verify,
+                    "suggested_vendor_questions": artifact.suggested_vendor_questions,
+                    "conversation_opportunities": [
+                        item.model_dump(mode="json")
+                        for item in artifact.conversation_opportunities
+                    ],
+                    "limitations": artifact.limitations,
+                }
+                if artifact
+                else None
+            ),
             "estimator_research": (
                 initial.model_dump(mode="json") if initial else None
             ),
             "prior_completed_calls": prior_calls,
             "usage_boundary": (
-                "Use this context to choose more accurate questions. It is not a "
-                "confirmed job fact and is not authorized competing-bid leverage."
+                "Use pre_call_brief to ask better questions from the beginning. "
+                "Only frame a confirmed fact when an opportunity names that field. "
+                "External research and prior calls are not authorized competing-bid "
+                "leverage."
             ),
         }
         self.service.store.save_call_context(call_id, context)

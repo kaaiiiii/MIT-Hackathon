@@ -18,7 +18,7 @@ to `job_spec_versions` only after explicit user confirmation.
 ## Integrated React frontend
 
 The supplied Negotiator React frontend now lives in `apps/web`. Its former disabled
-Home placeholder runs the real ElevenLabs Estimator intake, shows evidence and Luna
+Home placeholder runs the real ElevenLabs Estimator intake, shows evidence and Terra
 research, confirms the immutable specification, and hands its version to Caller Lab.
 The Report route reads stored call outcomes, quote evidence, transcripts, recordings,
 and both research stages from FastAPI instead of relying only on sample JSON.
@@ -75,10 +75,19 @@ See [`docs/ESTIMATOR.md`](docs/ESTIMATOR.md) for the contracts and examples.
   earlier terminal calls for the same immutable spec. The snapshot contains stored
   transcript, quote, evidence, and outcome data so GPT can avoid failed questions and
   ask more accurate follow-ups.
+- If a confirmed Estimator version has no stored research yet, call start first runs
+  one idempotent Terra web-search pass over its evidenced fields and full stored
+  ElevenLabs user transcript. A compact `pre_call_brief` is then sent to both the
+  silent GPT adviser and the ElevenLabs Caller Agent before the voice connection is
+  opened.
+- The pre-call brief contains likely fee categories and safe conversation
+  opportunities. `ask_vendor` opportunities remain questions;
+  `frame_confirmed_fact` opportunities may use only the explicitly named confirmed
+  fields.
 - Prior-call prices are not leverage by default. Only an evidence-referenced bid in
   `approved_verified_leverage` authorizes the Caller to disclose a competing number.
 - `POST /api/v1/reports/{version_id}/prepare` is the pre-report gate. It rejects
-  nonterminal calls, performs a fresh deep research pass across the spec and completed
+  nonterminal calls, performs a fresh web-search pass across the spec and completed
   call record, stores it, and returns the full report input context.
 - `GET /api/v1/research/specs/{version_id}/report-context` returns the confirmed spec,
   initial research, completed calls, and latest final research without generating a
@@ -111,28 +120,29 @@ confidence, and voice-turn/document-region/catalog reference before the call sta
   evidence is mandatory and cross-call evidence is rejected.
 - Both sides of every conversation are durably stored in sequence and supplied to
   GPT as bounded conversation history, alongside the cumulative structured quote.
-- A deterministic dialogue planner chooses exactly one next action. GPT phrases that
-  action naturally and extracts only the latest vendor statement; it does not control
-  the overall call strategy.
-- Caller prompting is split into two runtime layers: `negotiation_policy.txt` teaches
-  broad human communication and ethical negotiation judgment, while
-  `text_buyer_agent.txt` only realizes the planner-selected action and extracts the
-  latest evidenced facts.
+- The live browser Caller is an authenticated ElevenLabs Agent conversation. The
+  ElevenLabs Agent owns listening, interruptions, conversational judgment, wording,
+  and speech. GPT runs silently as a typed turn adviser: it extracts the latest
+  evidence and recommends one objective, but does not return the spoken sentence.
+- Caller prompting is split by responsibility: `elevenlabs_agent.txt` governs the
+  live voice agent, `turn_adviser.txt` governs silent GPT decisions, and
+  `negotiation_policy.txt` supplies shared ethical negotiation principles.
 - Missing customer information follows a two-turn policy: request a provisional range,
   then capture exact callback requirements, then finalize a callback-required outcome.
 - Explicit itemization refusals become transcript-backed `itemization_status=refused`.
   That closes the itemization objective, prevents paraphrased re-asking, and advances
   the Caller to total and fee clarification. A policy that requires itemization then
   finalizes the result as an incomplete quote rather than pressuring the vendor.
-- Spoken responses are checked for length, multiple questions, robotic openers, formal
-  template phrases, and repetition. One wording-only GPT retry is allowed.
+- The compatibility text/STT/TTS harness still validates GPT-authored spoken replies;
+  the live Agent path instead records the exact ElevenLabs-authored utterance against
+  the GPT advice ID that preceded it.
 - Competing-bid leverage must be supplied as a verified, evidence-referenced policy
   input for the same immutable job. The Caller cannot select or invent leverage.
 - A deterministic simulated voice adapter supports end-to-end development before
   ElevenLabs, Twilio, or SIP is connected.
-- The local demo supports microphone audio -> ElevenLabs Scribe v2 -> GPT-5.4 ->
-  ElevenLabs Flash v2.5 -> browser audio playback.
-- Voice turns are latency-optimized: recording auto-sends after a short pause,
+- The local demo uses one ElevenLabs conversational Agent end to end. Two blocking
+  client tools connect it to GPT decision advice and the Caller's evidence store.
+- The compatibility voice endpoints remain latency-optimized: recording auto-sends after a short pause,
   the turn JSON returns as soon as GPT answers (`?tts=stream`), and speech is
   streamed from `GET /api/v1/demo/voice/sessions/{call_id}/speech` so playback
   starts on the first audio chunk. The fixed greeting audio is cached.
@@ -197,6 +207,18 @@ ElevenLabs API key to the browser.
 $env:ELEVENLABS_INTAKE_AGENT_ID = "agent_your_intake_agent_id"
 ```
 
+The Caller uses a separate ElevenLabs Agent. Configure its ID in the same server
+terminal:
+
+```powershell
+$env:ELEVENLABS_CALLER_AGENT_ID = "agent_your_caller_agent_id"
+```
+
+Load `apps/api/app/caller/prompts/elevenlabs_agent.txt` into that Agent, set its First
+message to `{{first_message}}`, and add blocking client tools named
+`advise_caller_turn` and `record_caller_utterance`. Their exact parameter contracts
+are in [`docs/ELEVENLABS_CALLER_AGENT.md`](docs/ELEVENLABS_CALLER_AGENT.md).
+
 In the ElevenLabs agent dashboard, use
 `apps/api/app/estimator/prompts/intake_agent.txt` as the intake instruction and add a
 blocking client tool named `capture_intake_evidence`. Its parameters are
@@ -215,14 +237,14 @@ JSON** exports the immutable object that the Caller reads by `version_id`.
 Without this value, the intake voice endpoint uses the simulated adapter for automated
 tests; the browser clearly reports that live ElevenLabs Agents is not configured.
 
-The keys stay server-side and are never sent to the browser. Optional model overrides
-default to `gpt-5.4` for live call turns, `gpt-5.6-luna` at medium reasoning for
-web-grounded research,
+The keys stay server-side and are never sent to the browser. `OPENAI_MODEL` selects
+the silent Caller adviser, while `OPENAI_RESEARCH_MODEL` selects the model used for
+web-grounded research. The legacy STT/TTS compatibility harness uses
 `scribe_v2`, and `eleven_flash_v2_5`:
 
 ```powershell
 $env:OPENAI_MODEL = "gpt-5.4"
-$env:OPENAI_RESEARCH_MODEL = "gpt-5.6-luna"
+$env:OPENAI_RESEARCH_MODEL = "gpt-5.6-terra"
 $env:ELEVENLABS_STT_MODEL = "scribe_v2"
 $env:ELEVENLABS_TTS_MODEL = "eleven_flash_v2_5"
 ```
@@ -234,22 +256,19 @@ uvicorn apps.api.app.main:app --reload
 ```
 
 Then open `http://127.0.0.1:8000/demo/` in a modern browser and select **Start
-test call**. Allow microphone access, select **Record vendor reply**, speak, and stop
-the recording. The backend sends the recording to ElevenLabs for transcription,
-runs the resulting text through the Caller and GPT, then sends the buyer response to
-ElevenLabs for speech generation. The browser receives only the generated audio.
+test call**. Start the embedded ElevenLabs conversation and speak as the vendor.
+ElevenLabs conducts the conversation while GPT silently analyzes each vendor turn,
+logs quote evidence, and advises the next objective.
 
-Typing remains available for quick testing; typed turns still use GPT and ElevenLabs
-voice output, but skip speech-to-text.
+Text input is available when voice + text is enabled in the ElevenLabs Agent's Widget
+settings. It follows the same Agent and advisory tool loop.
 
 The page includes a four-message quick test script that produces a complete quote.
 You can also try phrases such as “I will call you back tomorrow” or “I decline to
-quote” to exercise the other outcomes. When `OPENAI_API_KEY` is present, the demo uses
-`gpt-5.4` through the Responses API for natural conversation and same-turn structured
-fact extraction. Without a key, it falls back to the deterministic simulator. Both
-paths write through the same transcript, evidence, quote, state-machine, and
-finalization code. If ElevenLabs configuration is missing, the voice endpoint returns
-a clear configuration error rather than silently switching to browser speech.
+quote” to exercise the other outcomes. With all three required environment values,
+ElevenLabs owns the conversation and the OpenAI Responses API supplies same-turn
+advice and structured fact extraction. Missing configuration produces a clear error
+rather than silently switching the live page to a scripted caller.
 
 Enter an optional **Verified binding competing bid** before starting the demo to test
 an honest price-match turn. In production, the comparison/negotiation layer supplies

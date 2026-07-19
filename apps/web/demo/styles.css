@@ -115,6 +115,8 @@ button { cursor: pointer; }
 .workspace { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(330px, .75fr); border: 1px solid var(--line); border-top: 0; border-radius: 0 0 var(--radius) var(--radius); overflow: hidden; min-height: 570px; }
 .conversation-panel, .evidence-panel { background: var(--panel); }
 .conversation-panel { display: flex; flex-direction: column; min-height: 570px; }
+.caller-agent-host { padding: 18px 22px 24px; border-top: 1px solid var(--line); }
+.caller-agent-host elevenlabs-convai { display: block; width: 100%; min-height: 180px; }
 .evidence-panel { border-left: 1px solid var(--line); padding-bottom: 18px; background: #141815; }
 .panel-heading { display: flex; align-items: center; justify-content: space-between; min-height: 78px; padding: 18px 22px; border-bottom: 1px solid var(--line); }
 .panel-heading h2 { margin: 7px 0 0; font-size: 17px; letter-spacing: -.02em; }

@@ -86,7 +86,7 @@ form.addEventListener("submit", async (event) => {
     });
     renderDraft(result.session);
     setStep(2);
-    await runDeepResearch();
+    await runWebSearch();
   } catch (error) {
     setNotice(error.message, "error");
   } finally {
@@ -204,10 +204,12 @@ async function captureVoiceEvidence(parameters) {
     body: JSON.stringify(payload),
   });
   renderDraft(result.session);
+  if (!researchBundle && Object.keys(result.session.fields ?? {}).length > 0) {
+    void runWebSearch();
+  }
   if (result.session.status === "awaiting_confirmation") {
     setStep(2);
     setNotice("Voice interview complete. GPT is extending the job context now.", "working");
-    void runDeepResearch();
   }
   return {
     saved: true,
@@ -219,7 +221,7 @@ async function captureVoiceEvidence(parameters) {
   };
 }
 
-async function runDeepResearch() {
+async function runWebSearch() {
   if (!sessionId || researchBusy || researchBundle) return researchBundle;
   researchBusy = true;
   researchPanel.hidden = false;
@@ -237,7 +239,7 @@ async function runDeepResearch() {
     researchStatus.textContent = "Unavailable";
     researchStatus.className = "pill muted";
     researchSummary.textContent = error.message;
-    setNotice(`The evidence draft is ready, but deep research failed: ${error.message}`, "error");
+    setNotice(`The evidence draft is ready, but web search failed: ${error.message}`, "error");
     return null;
   } finally {
     researchBusy = false;

@@ -14,6 +14,7 @@ from .schemas import (
     PendingCatalogResolution,
     VoiceTurnRequest,
     VoiceTurnResponse,
+    UnknownAcknowledgementRequest,
 )
 from .service import EstimatorService
 
@@ -113,5 +114,14 @@ def build_estimator_router(service: EstimatorService) -> APIRouter:
         session_id: str, request: ConfirmSpecRequest
     ) -> ConfirmedJobSpecView:
         return service.confirm(session_id, request)
+
+    @router.post(
+        "/sessions/{session_id}/acknowledge-unknowns",
+        response_model=IntakeSessionView,
+    )
+    def acknowledge_unknowns(
+        session_id: str, request: UnknownAcknowledgementRequest
+    ) -> IntakeSessionView:
+        return service.acknowledge_unknowns(session_id, request)
 
     return router

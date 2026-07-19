@@ -195,8 +195,13 @@ startButton.addEventListener("click", async () => {
   if (conversationActive) endConversation("Starting a new call…");
   setBusy(true);
   try {
+    if (!requestedJobSpecVersionId) {
+      throw new Error(
+        "No confirmed Estimator specification was selected. Return to the Estimator and confirm a job first.",
+      );
+    }
     const total = Number(competingBidTotal.value);
-    const activeJobSpecVersionId = requestedJobSpecVersionId ?? "demo_spec_piano";
+    const activeJobSpecVersionId = requestedJobSpecVersionId;
     const payload = { job_spec_version_id: activeJobSpecVersionId };
     if (Number.isFinite(total) && total > 0) {
       payload.verified_competing_bid = {

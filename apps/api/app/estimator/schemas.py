@@ -19,6 +19,7 @@ class EvidenceModality(StrEnum):
     VOICE = "voice"
     DOCUMENT = "document"
     CATALOG_RESOLUTION = "catalog_resolution"
+    USER_CONFIRMATION = "user_confirmation"
 
 
 class FieldConfidence(StrEnum):
@@ -166,6 +167,11 @@ class VoiceTurnRequest(BaseModel):
         if self.field_name and self.value is None and not self.mark_unknown:
             raise ValueError("A field name requires a value or mark_unknown")
         return self
+
+
+class UnknownAcknowledgementRequest(BaseModel):
+    field_names: list[str] = Field(min_length=1)
+    confirmed_by: str = Field(min_length=1)
 
 
 class VoiceTurnResponse(BaseModel):

@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .caller.adapters.elevenlabs_audio import ElevenLabsAudioAdapter
+from .caller.adapters.elevenlabs_agent import ElevenLabsCallerAgentAdapter
 from .caller.adapters.simulated import SimulatedVoiceSessionAdapter
 from .caller.audio import AudioPipelineAdapter
 from .caller.errors import (
@@ -23,6 +24,11 @@ from .caller.demo import (
     DEMO_VENDOR,
     TextVoiceSimulator,
     build_demo_router,
+)
+from .caller.elevenlabs_loop import (
+    ElevenLabsCallerLoop,
+    build_elevenlabs_caller_router,
+    build_unconfigured_elevenlabs_caller_router,
 )
 from .caller.input_gateway import (
     EstimatorAwareCallerInputGateway,
@@ -87,6 +93,7 @@ def create_app(
     inputs: CallerInputGateway | None = None,
     adapter: VoiceSessionAdapter | None = None,
     buyer_model: BuyerTurnModel | None = None,
+    caller_agent_adapter: ElevenLabsCallerAgentAdapter | None = None,
     audio_adapter: AudioPipelineAdapter | None = None,
     estimator_document_parser: DocumentParser | None = None,
     estimator_catalog_resolver: CatalogResolver | None = None,
@@ -103,6 +110,9 @@ def create_app(
     )
     configured_estimator_voice_adapter = (
         estimator_voice_adapter or _configured_intake_voice_adapter()
+    )
+    configured_caller_agent_adapter = (
+        caller_agent_adapter or _configured_caller_agent_adapter()
     )
     configured_conversation_importer = estimator_conversation_importer
     if configured_conversation_importer is None and hasattr(
@@ -147,6 +157,8 @@ def create_app(
         close_voice = getattr(configured_estimator_voice_adapter, "close", None)
         if close_voice is not None:
             await close_voice()
+        if configured_caller_agent_adapter is not None:
+            await configured_caller_agent_adapter.close()
         store.close()
 
     app = FastAPI(title="Nego Caller API", version="0.1.0", lifespan=lifespan)
@@ -182,6 +194,34 @@ def create_app(
         )
     app.state.demo_buyer_model = buyer_model
     app.state.demo_audio_adapter = audio_adapter
+    app.state.caller_agent_adapter = configured_caller_agent_adapter
+    if (
+        buyer_model is not None
+        and hasattr(buyer_model, "advise")
+        and configured_caller_agent_adapter is not None
+    ):
+        caller_agent_loop = ElevenLabsCallerLoop(
+            orchestrator=demo_orchestrator,
+            advisor=buyer_model,  # type: ignore[arg-type]
+            connection_adapter=configured_caller_agent_adapter,
+            default_spec_version_id=DEMO_SPEC.version_id,
+            vendor=DEMO_VENDOR,
+        )
+        app.state.caller_agent_loop = caller_agent_loop
+        app.include_router(build_elevenlabs_caller_router(caller_agent_loop))
+    else:
+        missing = []
+        if configured_caller_agent_adapter is None:
+            missing.append("ELEVENLABS_CALLER_AGENT_ID and ELEVENLABS_API_KEY")
+        if buyer_model is None or not hasattr(buyer_model, "advise"):
+            missing.append("OPENAI_API_KEY")
+        app.include_router(
+            build_unconfigured_elevenlabs_caller_router(
+                "ElevenLabs Caller Agent is not configured. Set "
+                + " and ".join(missing)
+                + ", then restart the API."
+            )
+        )
 
     samples_service = SampleCallsService(
         SQLiteSamplesStore(store.connection),
@@ -290,6 +330,14 @@ def _configured_audio_adapter() -> AudioPipelineAdapter | None:
     )
 
 
+def _configured_caller_agent_adapter() -> ElevenLabsCallerAgentAdapter | None:
+    api_key = os.getenv("ELEVENLABS_API_KEY")
+    agent_id = os.getenv("ELEVENLABS_CALLER_AGENT_ID")
+    if not api_key or not agent_id:
+        return None
+    return ElevenLabsCallerAgentAdapter(api_key=api_key, agent_id=agent_id)
+
+
 def _configured_intake_voice_adapter() -> IntakeVoiceAdapter:
     api_key = os.getenv("ELEVENLABS_API_KEY")
     agent_id = os.getenv("ELEVENLABS_INTAKE_AGENT_ID")
@@ -314,7 +362,7 @@ def _configured_context_researcher() -> ContextResearcher | None:
         return None
     return OpenAIContextResearcher(
         api_key=api_key,
-        model=os.getenv("OPENAI_RESEARCH_MODEL", "gpt-5.2"),
+        model=os.getenv("OPENAI_RESEARCH_MODEL", "gpt-5.6-terra"),
     )
 
 

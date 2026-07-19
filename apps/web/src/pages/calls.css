@@ -57,3 +57,17 @@
   border-radius: 14px;
   background: #fff;
 }
+
+.calls-page__empty {
+  display: grid;
+  justify-items: start;
+  gap: 0.75rem;
+  padding: 2rem;
+  border: 1px solid rgba(120, 120, 140, 0.25);
+  border-radius: 14px;
+}
+
+.calls-page__empty h2,
+.calls-page__empty p {
+  margin: 0;
+}
