@@ -1,0 +1,486 @@
+/* Report — the back office: dense, ruled, monospaced. */
+
+.report {
+  max-width: var(--measure-report);
+  margin: 0 auto;
+  padding: var(--s6) var(--s5) var(--s8);
+}
+
+.report__masthead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--s5);
+  flex-wrap: wrap;
+}
+
+.report__title {
+  font-size: var(--fs-title);
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.report-stamp {
+  display: block;
+  margin-top: var(--s2);
+}
+
+.report-error {
+  color: var(--red);
+}
+
+.mono-digit {
+  font-family: var(--font-mono);
+  font-size: var(--fs-digit-inline);
+}
+
+/* ---- data & demo cluster: small and quiet ---- */
+
+.data-cluster {
+  text-align: right;
+}
+
+.data-cluster__row {
+  display: flex;
+  gap: var(--s2);
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.data-cluster__upload {
+  position: relative;
+  overflow: hidden;
+}
+
+.data-cluster__upload input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.data-cluster__upload:focus-within {
+  outline: 2px solid var(--paper-0);
+  outline-offset: 2px;
+}
+
+.data-cluster__status {
+  margin-top: var(--s2);
+}
+
+.data-cluster__clear {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--paper-2);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+/* ---- 01 your move ---- */
+
+.spec-strip {
+  border: var(--hairline);
+  background: var(--ink-1);
+  padding: var(--s5) var(--s5) var(--s2);
+}
+
+.spec-strip__sentence {
+  font-size: var(--fs-lede);
+  max-width: 70ch;
+}
+
+.spec-strip__grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--s4);
+  margin: var(--s5) 0 var(--s4);
+}
+
+.spec-strip__grid dt {
+  margin-bottom: var(--s1);
+}
+
+.spec-strip__grid dd {
+  margin: 0;
+  color: var(--paper-0);
+}
+
+.spec-strip__fact {
+  padding: var(--s1) 0;
+  color: var(--paper-1);
+}
+
+.spec-strip__fact .micro {
+  display: inline-block;
+  min-width: 14ch;
+}
+
+.spec-strip__sha {
+  margin-top: var(--s3);
+  color: var(--paper-2);
+  word-break: break-all;
+}
+
+/* ---- 02 the decision (the only amber surface) ---- */
+
+.decision {
+  border: 1px solid var(--amber-deep);
+  background: var(--amber-tint);
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: var(--s5);
+  padding: var(--s5);
+}
+
+.decision__verb {
+  font-size: var(--fs-title);
+  font-weight: 900;
+  text-transform: uppercase;
+  line-height: 1.05;
+}
+
+.decision__headline {
+  margin-top: var(--s3);
+  color: var(--paper-1);
+  max-width: 60ch;
+}
+
+.decision__metrics {
+  display: flex;
+  gap: var(--s6);
+  margin: var(--s5) 0 var(--s2);
+  padding: var(--s3) 0;
+  border-top: var(--hairline);
+  border-bottom: var(--hairline);
+  flex-wrap: wrap;
+}
+
+.decision__metrics dt {
+  margin-bottom: var(--s1);
+}
+
+.decision__metrics dd {
+  margin: 0;
+  font-size: var(--fs-metric);
+  font-weight: 600;
+}
+
+.decision__metrics .delta {
+  font-size: var(--fs-metric);
+}
+
+.decision__context {
+  margin-bottom: var(--s3);
+}
+
+.decision__rationale {
+  max-width: 68ch;
+  color: var(--paper-1);
+}
+
+.decision__steps {
+  margin-top: var(--s4);
+}
+
+.decision__steps h4 {
+  margin-bottom: var(--s2);
+}
+
+.decision__actions {
+  margin-top: var(--s5);
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  flex-wrap: wrap;
+}
+
+.decision__price {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: flex-end;
+  text-align: right;
+  gap: var(--s2);
+  padding-left: var(--s5);
+  border-left: var(--hairline);
+}
+
+.decision__price-num {
+  font-family: var(--font-mono);
+  font-size: var(--fs-price);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--amber);
+  letter-spacing: var(--track-price);
+}
+
+/* ---- 03 the blotter ---- */
+
+.report__counts {
+  margin-bottom: var(--s4);
+}
+
+.blotter {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--s4);
+}
+
+.blotter__cell {
+  min-width: 0;
+  will-change: transform;
+}
+
+.entry {
+  height: 100%;
+  border: var(--hairline);
+  background: var(--ink-1);
+  padding: var(--s4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+}
+
+.entry--pick {
+  border-left: 3px solid var(--amber);
+}
+
+.entry--flagged {
+  border-color: var(--red);
+}
+
+.entry__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+}
+
+.entry__rank {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--paper-3);
+}
+
+.entry__name {
+  font-size: var(--fs-lede);
+  font-weight: 700;
+  flex: 1;
+  min-width: 0;
+}
+
+.entry__tags {
+  display: flex;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.entry__prices {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+}
+
+.entry__price-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s3);
+  padding: var(--s1) 0;
+  border-bottom: 1px dotted var(--line-0);
+}
+
+.entry__price-row dd {
+  margin: 0;
+}
+
+.strike {
+  text-decoration: line-through;
+  color: var(--paper-3);
+}
+
+.entry__final-num {
+  font-size: var(--fs-entry-price);
+  font-weight: 600;
+}
+
+.entry__reason {
+  flex: 1;
+}
+
+.entry__flags {
+  color: var(--red);
+  border-left: 2px solid var(--red);
+  padding-left: var(--s3);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.entry__warning {
+  font-size: var(--fs-micro);
+}
+
+.entry__typed {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--paper-1);
+  border-top: 1px dotted var(--line-1);
+  padding-top: var(--s3);
+  min-height: 2.6em;
+}
+
+.entry__typed-who {
+  color: var(--paper-3);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--track-caps);
+}
+
+.entry__open {
+  margin-top: auto;
+  text-align: center;
+}
+
+/* ---- red flag stamp ---- */
+
+.stamp {
+  margin-top: var(--s6);
+  border: 2px solid var(--red);
+  outline: 1px solid var(--red);
+  outline-offset: -5px;
+  background: var(--red-tint);
+  padding: var(--s5);
+}
+
+.stamp__title {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  font-weight: 600;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  color: var(--red);
+  border: 1px solid var(--red);
+  padding: 2px 10px;
+  transform: rotate(-1deg);
+}
+
+.stamp__rule {
+  margin-top: var(--s3);
+}
+
+.stamp__vendor {
+  margin-top: var(--s4);
+}
+
+.stamp__list {
+  margin: var(--s2) 0 0;
+  padding-left: var(--s5);
+}
+
+.stamp__list li {
+  padding: var(--s1) 0;
+  color: var(--paper-1);
+}
+
+.stamp__flag-key {
+  color: var(--red);
+  text-transform: uppercase;
+  font-size: var(--fs-micro);
+  letter-spacing: var(--track-caps);
+  font-weight: 600;
+}
+
+/* ---- 04 for the skeptical ---- */
+
+.chart {
+  margin: var(--s5) 0;
+}
+
+.chart-micro {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  letter-spacing: var(--track-caps);
+}
+
+.chart figcaption {
+  margin-top: var(--s2);
+}
+
+.skeptic__footnote {
+  margin: var(--s3) 0 var(--s5);
+  max-width: 78ch;
+}
+
+.skeptic__breakdown {
+  margin-top: var(--s4);
+}
+
+.ledger--narrow {
+  max-width: 34rem;
+}
+
+.skeptic__scroll {
+  overflow-x: auto;
+}
+
+.evidence__pull {
+  border-top: var(--hairline);
+  padding: var(--s4) 0;
+}
+
+.evidence__quote {
+  margin: var(--s3) 0;
+  display: grid;
+  grid-template-columns: 7ch 1fr;
+  gap: var(--s3);
+  border-left: var(--hairline);
+  padding-left: var(--s3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+}
+
+.evidence__stamp {
+  color: var(--paper-3);
+}
+
+.evidence__text {
+  color: var(--paper-0);
+  line-height: 1.6;
+}
+
+/* ---- responsive ---- */
+
+@media (max-width: 900px) {
+  .blotter {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .decision {
+    grid-template-columns: 1fr;
+  }
+
+  .decision__price {
+    border-left: none;
+    border-top: var(--hairline);
+    padding: var(--s4) 0 0;
+    align-items: flex-start;
+    text-align: left;
+  }
+
+  .spec-strip__grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 560px) {
+  .blotter {
+    grid-template-columns: 1fr;
+  }
+
+  .decision__metrics {
+    gap: var(--s4);
+  }
+}

@@ -25,12 +25,18 @@ INPUTS (stored records only; never model memory)
   and vendor hold-until commitments.
 - Transcript evidence references and recording references per call.
 - Backend-resolved benchmark data and deterministic ranking/red-flag results.
+- Fresh final-report research, when present, as non-quote context with cited sources.
 
 HARD GROUNDING RULE
 Every price, fee, deadline, comparison, negotiation change, reliability claim, and
 red flag in the report must trace to supplied structured evidence. Include the
 supporting evidence reference IDs in the JSON output. Do not infer, estimate, repair,
 or fill gaps. State "not provided" when evidence is missing.
+
+Research may explain terminology, market conditions, operational risks, or questions
+the customer should ask. It may not supply a missing quote value, alter the confirmed
+job, prove a vendor claim, create leverage, or override transcript evidence. Clearly
+label researched context and preserve its citations and limitations.
 
 Do not treat the customer's decision deadline as a vendor commitment. A vendor offer
 holds until that deadline only when the vendor explicitly confirmed the same

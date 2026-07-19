@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="No-JSON browser test for the Nego Estimator" />
+    <meta name="description" content="Voice and document intake for the Nego Estimator" />
     <title>Estimator Lab</title>
     <link rel="stylesheet" href="/demo/estimator.css" />
   </head>
@@ -12,7 +12,7 @@
       <header>
         <a class="brand" href="/demo/estimator.html">
           <span class="mark">E</span>
-          <span><strong>Estimator Lab</strong><small>No JSON required</small></span>
+          <span><strong>Estimator Lab</strong><small>Voice or document intake</small></span>
         </a>
         <a class="caller-link" href="/demo/">Open Caller Lab</a>
       </header>
@@ -20,27 +20,48 @@
       <main>
         <section class="hero">
           <span class="eyebrow">LOCAL ESTIMATOR TEST</span>
-          <h1>Build a confirmed job spec<br /><em>with two buttons.</em></h1>
+          <h1>Build one confirmed job spec<br /><em>by voice or document.</em></h1>
           <p>
-            Edit the sample job, build the evidence-backed draft, review it, and
-            confirm it. The page handles every API request for you.
+            Speak with an ElevenLabs intake agent or submit the sample document form.
+            Both paths write into the same evidence-backed draft for your review.
           </p>
         </section>
 
         <ol class="steps" aria-label="Estimator test progress">
-          <li class="active" data-step="1"><b>1</b><span>Enter job</span></li>
+          <li class="active" data-step="1"><b>1</b><span>Capture details</span></li>
           <li data-step="2"><b>2</b><span>Review evidence</span></li>
           <li data-step="3"><b>3</b><span>Confirmed</span></li>
         </ol>
 
         <div id="notice" class="notice" role="status">
-          Sample moving details are already filled in. Change anything you want.
+          Choose the ElevenLabs voice interview or edit and submit the document form.
         </div>
+
+        <section class="intake-options" aria-label="Intake methods">
+          <article class="intake-option voice-option">
+            <div>
+              <span class="kicker">ELEVENLABS AGENTS</span>
+              <h2>Voice interview</h2>
+              <p>The agent asks one planned question at a time and logs each answer with transcript evidence.</p>
+            </div>
+            <button id="voice-start-button" class="primary" type="button">Start voice interview</button>
+            <div id="voice-status" class="voice-status">Requires the ElevenLabs API key and intake Agent ID.</div>
+            <div id="voice-host" class="voice-host"></div>
+          </article>
+          <article class="intake-option document-option">
+            <div>
+              <span class="kicker">DOCUMENT INTAKE</span>
+              <h2>Structured moving inventory</h2>
+              <p>The editable form below is submitted as one supported document with a region reference for every field.</p>
+            </div>
+            <a class="secondary option-link" href="#job-form">Use document form</a>
+          </article>
+        </section>
 
         <section class="workspace">
           <form id="job-form" class="panel">
             <div class="panel-heading">
-              <div><span class="kicker">JOB DETAILS</span><h2>Moving specification</h2></div>
+              <div><span class="kicker">DOCUMENT PATH</span><h2>Moving specification</h2></div>
               <span class="pill">Moving v1.0</span>
             </div>
 
@@ -94,6 +115,14 @@
             <div id="review-content" hidden>
               <div id="field-list" class="field-list"></div>
               <div id="missing-fields" class="missing" hidden></div>
+              <section id="research-panel" class="research-panel" hidden>
+                <div class="research-heading">
+                  <span class="kicker">GPT DEEP CONTEXT</span>
+                  <span id="research-status" class="pill muted">Waiting</span>
+                </div>
+                <p id="research-summary"></p>
+                <div id="research-details"></div>
+              </section>
               <button id="confirm-button" class="primary confirm" type="button">
                 Yes, confirm this specification
               </button>
@@ -116,10 +145,11 @@
       </main>
 
       <footer>
-        This test writes a real confirmed version to your local test database. It does
-        not call a vendor or use an external AI service.
+        Both intake methods write to one draft. Only your explicit confirmation creates
+        the immutable version used by the Caller.
       </footer>
     </div>
+    <script src="https://unpkg.com/@elevenlabs/convai-widget-embed" async type="text/javascript"></script>
     <script type="module" src="/demo/estimator.js"></script>
   </body>
 </html>

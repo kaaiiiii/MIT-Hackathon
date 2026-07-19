@@ -9,6 +9,13 @@ const confirmedResult = document.querySelector("#confirmed-result");
 const fieldList = document.querySelector("#field-list");
 const missingFields = document.querySelector("#missing-fields");
 const draftStatus = document.querySelector("#draft-status");
+const voiceStartButton = document.querySelector("#voice-start-button");
+const voiceStatus = document.querySelector("#voice-status");
+const voiceHost = document.querySelector("#voice-host");
+const researchPanel = document.querySelector("#research-panel");
+const researchStatus = document.querySelector("#research-status");
+const researchSummary = document.querySelector("#research-summary");
+const researchDetails = document.querySelector("#research-details");
 
 const fieldDefinitions = [
   ["service", "service", "Service"],
@@ -24,6 +31,9 @@ const fieldDefinitions = [
 
 let sessionId = null;
 let busy = false;
+let voiceWidget = null;
+let researchBusy = false;
+let researchBundle = null;
 
 async function api(path, options = {}) {
   const isForm = options.body instanceof FormData;
@@ -61,11 +71,7 @@ form.addEventListener("submit", async (event) => {
   setBusy(true);
   setNotice("Building the draft and attaching evidence...", "working");
   try {
-    const session = await api("/api/v1/intake/sessions", {
-      method: "POST",
-      body: JSON.stringify({ vertical: "moving", benchmark_refs: [] }),
-    });
-    sessionId = session.session_id;
+    await ensureSession();
 
     const upload = new FormData();
     upload.append("document_type", "moving_inventory_json");
@@ -80,8 +86,34 @@ form.addEventListener("submit", async (event) => {
     });
     renderDraft(result.session);
     setStep(2);
-    setNotice("Draft built. Review the evidence, then confirm it.", "success");
+    await runDeepResearch();
   } catch (error) {
+    setNotice(error.message, "error");
+  } finally {
+    setBusy(false);
+  }
+});
+
+voiceStartButton.addEventListener("click", async () => {
+  if (busy || voiceWidget) return;
+  setBusy(true);
+  setNotice("Preparing a private ElevenLabs Agents interview...", "working");
+  try {
+    await ensureSession();
+    const result = await api(`/api/v1/intake/sessions/${sessionId}/voice`, {
+      method: "POST",
+    });
+    renderDraft(result.session);
+    if (result.voice_provider !== "elevenlabs_agents") {
+      throw new Error(
+        "ElevenLabs Agents is not configured. Set ELEVENLABS_API_KEY and ELEVENLABS_INTAKE_AGENT_ID, then restart the API."
+      );
+    }
+    mountVoiceWidget(result);
+    setNotice("Voice interview ready. Start the conversation in the ElevenLabs panel.", "success");
+  } catch (error) {
+    voiceStatus.textContent = error.message;
+    voiceStatus.className = "voice-status error";
     setNotice(error.message, "error");
   } finally {
     setBusy(false);
@@ -109,6 +141,16 @@ confirmButton.addEventListener("click", async () => {
 
 resetButton.addEventListener("click", () => {
   sessionId = null;
+  voiceWidget?.remove();
+  voiceWidget = null;
+  voiceHost.replaceChildren();
+  voiceStatus.textContent = "Requires the ElevenLabs API key and intake Agent ID.";
+  voiceStatus.className = "voice-status";
+  researchBusy = false;
+  researchBundle = null;
+  researchPanel.hidden = true;
+  researchSummary.textContent = "";
+  researchDetails.replaceChildren();
   reviewEmpty.hidden = false;
   reviewContent.hidden = true;
   confirmedResult.hidden = true;
@@ -118,6 +160,136 @@ resetButton.addEventListener("click", () => {
   setStep(1);
   setNotice("Change any sample details, then build a new draft.");
 });
+
+async function ensureSession() {
+  if (sessionId) return sessionId;
+  const session = await api("/api/v1/intake/sessions", {
+    method: "POST",
+    body: JSON.stringify({ vertical: "moving", benchmark_refs: [] }),
+  });
+  sessionId = session.session_id;
+  return sessionId;
+}
+
+function mountVoiceWidget(result) {
+  voiceHost.replaceChildren();
+  const widget = document.createElement("elevenlabs-convai");
+  widget.setAttribute("signed-url", result.provider_connection_url);
+  widget.setAttribute("variant", "expanded");
+  widget.setAttribute("start-call-text", "Begin intake interview");
+  widget.setAttribute("end-call-text", "End interview");
+  widget.setAttribute("dynamic-variables", JSON.stringify(result.provider_context));
+  widget.addEventListener("elevenlabs-convai:call", (event) => {
+    event.detail.config.clientTools = {
+      capture_intake_evidence: captureVoiceEvidence,
+    };
+  });
+  voiceWidget = widget;
+  voiceHost.append(widget);
+  voiceStatus.textContent = "ElevenLabs Agents connected to this Estimator draft.";
+  voiceStatus.className = "voice-status connected";
+}
+
+async function captureVoiceEvidence(parameters) {
+  const payload = {
+    turn_id: `voice_${crypto.randomUUID()}`,
+    user_text: parameters.user_text,
+    field_name: parameters.field_name ?? null,
+    value: parameters.value ?? null,
+    mark_unknown: parameters.mark_unknown ?? false,
+    unknown_acknowledged: parameters.unknown_acknowledged ?? false,
+  };
+  const result = await api(`/api/v1/intake/sessions/${sessionId}/voice`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  renderDraft(result.session);
+  if (result.session.status === "awaiting_confirmation") {
+    setStep(2);
+    setNotice("Voice interview complete. GPT is extending the job context now.", "working");
+    void runDeepResearch();
+  }
+  return {
+    saved: true,
+    status: result.session.status,
+    next_field: result.next_field,
+    question_objective: result.next_question_objective,
+    spoken_question: result.spoken_question,
+    missing_required_fields: result.session.missing_required_fields,
+  };
+}
+
+async function runDeepResearch() {
+  if (!sessionId || researchBusy || researchBundle) return researchBundle;
+  researchBusy = true;
+  researchPanel.hidden = false;
+  researchStatus.textContent = "Researching";
+  researchStatus.className = "pill";
+  researchSummary.textContent = "Checking current sources and building questions, risks, and terminology for the calls.";
+  try {
+    researchBundle = await api(`/api/v1/research/intake/sessions/${sessionId}/enrich`, {
+      method: "POST",
+    });
+    renderResearch(researchBundle);
+    setNotice("Evidence and cited GPT context are ready. Review them, then confirm.", "success");
+    return researchBundle;
+  } catch (error) {
+    researchStatus.textContent = "Unavailable";
+    researchStatus.className = "pill muted";
+    researchSummary.textContent = error.message;
+    setNotice(`The evidence draft is ready, but deep research failed: ${error.message}`, "error");
+    return null;
+  } finally {
+    researchBusy = false;
+  }
+}
+
+function renderResearch(bundle) {
+  const artifact = bundle.artifact;
+  researchPanel.hidden = false;
+  researchStatus.textContent = bundle.model;
+  researchStatus.className = "pill ready";
+  researchSummary.textContent = artifact.topic_summary;
+  researchDetails.replaceChildren();
+
+  const groups = [
+    ["Risks to verify", artifact.risk_factors],
+    ["Questions for vendors", artifact.suggested_vendor_questions],
+    ["Research limitations", artifact.limitations],
+  ];
+  for (const [label, values] of groups) {
+    if (!values?.length) continue;
+    const section = document.createElement("section");
+    const heading = document.createElement("strong");
+    const list = document.createElement("ul");
+    heading.textContent = label;
+    for (const value of values) {
+      const item = document.createElement("li");
+      item.textContent = value;
+      list.append(item);
+    }
+    section.append(heading, list);
+    researchDetails.append(section);
+  }
+  if (artifact.sources?.length) {
+    const section = document.createElement("section");
+    const heading = document.createElement("strong");
+    heading.textContent = "Sources";
+    const list = document.createElement("ul");
+    for (const source of artifact.sources) {
+      const item = document.createElement("li");
+      const link = document.createElement("a");
+      link.href = source.url;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      link.textContent = source.title;
+      item.append(link);
+      list.append(item);
+    }
+    section.append(heading, list);
+    researchDetails.append(section);
+  }
+}
 
 function renderDraft(session) {
   reviewEmpty.hidden = true;
@@ -172,6 +344,7 @@ function setBusy(value) {
   buildButton.disabled = value;
   confirmButton.disabled = value;
   resetButton.disabled = value;
+  voiceStartButton.disabled = value || Boolean(voiceWidget);
 }
 
 function setStep(step) {

@@ -1,14 +1,13 @@
 from fastapi.testclient import TestClient
 
 from apps.api.app.main import create_app
-from apps.api.app.caller.dialogue_planner import DialogueAction, DialoguePlanner
+from apps.api.app.caller.dialogue_planner import DialogueAction
 from apps.api.app.caller.openai_agent import (
     BuyerTurnDecision,
     ExtractedLineItem,
     ExtractedTerm,
 )
 from apps.api.app.caller.audio import SynthesizedAudio
-from apps.api.app.caller.schemas import CallView
 
 
 class FakeBuyerModel:
@@ -306,13 +305,6 @@ def test_itemization_refusal_is_recorded_once_and_advances_the_call(tmp_path):
         ]
         assert len(refusal_terms) == 1
         assert refusal_terms[0]["value"] == "refused"
-        plan = DialoguePlanner().plan(
-            CallView.model_validate(body["call"]),
-            "I prefer not to disclose the breakdown.",
-            {"service": "Move one upright piano"},
-        )
-        assert plan.selected_action == DialogueAction.REQUEST_TOTAL
-
         body = send(client, call_id, "The bundled total is $500.")
         assert body["call"]["call"]["status"] == "quote_clarification"
         body = send(

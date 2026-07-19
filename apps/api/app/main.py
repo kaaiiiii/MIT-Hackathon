@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .caller.adapters.elevenlabs_audio import ElevenLabsAudioAdapter
 from .caller.adapters.simulated import SimulatedVoiceSessionAdapter
@@ -48,6 +49,26 @@ from .estimator.ports import CatalogResolver, DocumentParser, IntakeVoiceAdapter
 from .estimator.router import build_estimator_router
 from .estimator.service import EstimatorService
 from .estimator.verticals import VerticalConfigLoader
+from .research.openai_researcher import ContextResearcher, OpenAIContextResearcher
+from .research.persistence import SQLiteResearchStore
+from .research.router import build_research_router
+from .research.service import CallerResearchContextProvider, ResearchService
+from .reporting.router import build_reporting_router
+
+
+class SPAStaticFiles(StaticFiles):
+    """Serve the Vite build while preserving client-side routes on refresh."""
+
+    async def get_response(self, path: str, scope):
+        try:
+            response = await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            return await super().get_response("index.html", scope)
+        if response.status_code == 404:
+            return await super().get_response("index.html", scope)
+        return response
 
 
 def create_app(
@@ -61,6 +82,7 @@ def create_app(
     estimator_catalog_resolver: CatalogResolver | None = None,
     estimator_configs: VerticalConfigLoader | None = None,
     estimator_voice_adapter: IntakeVoiceAdapter | None = None,
+    context_researcher: ContextResearcher | None = None,
 ) -> FastAPI:
     store = SQLiteCallerStore(
         database_path or os.getenv("CALLER_DB_PATH", "caller.sqlite3")
@@ -72,10 +94,26 @@ def create_app(
     composed_inputs = EstimatorAwareCallerInputGateway(
         store.connection, upstream_inputs
     )
+    estimator_store = SQLiteEstimatorStore(store.connection)
+    estimator_service = EstimatorService(
+        store=estimator_store,
+        configs=estimator_configs or VerticalConfigLoader(),
+        document_parser=estimator_document_parser or StructuredJsonDocumentParser(),
+        catalog_resolver=estimator_catalog_resolver or InMemoryCatalogResolver(),
+        voice_adapter=configured_estimator_voice_adapter,
+    )
+    research_store = SQLiteResearchStore(store.connection)
+    research_service = ResearchService(
+        store=research_store,
+        researcher=context_researcher,
+        estimator_service=estimator_service,
+    )
+    context_provider = CallerResearchContextProvider(research_service)
     orchestrator = CallOrchestrator(
         store=store,
         inputs=composed_inputs,
         adapter=adapter or SimulatedVoiceSessionAdapter(),
+        context_provider=context_provider,
     )
 
     @asynccontextmanager
@@ -93,17 +131,13 @@ def create_app(
     app.state.call_orchestrator = orchestrator
     app.include_router(build_caller_router(orchestrator))
 
-    estimator_store = SQLiteEstimatorStore(store.connection)
-    estimator_service = EstimatorService(
-        store=estimator_store,
-        configs=estimator_configs or VerticalConfigLoader(),
-        document_parser=estimator_document_parser or StructuredJsonDocumentParser(),
-        catalog_resolver=estimator_catalog_resolver or InMemoryCatalogResolver(),
-        voice_adapter=configured_estimator_voice_adapter,
-    )
     app.state.estimator_store = estimator_store
     app.state.estimator_service = estimator_service
     app.include_router(build_estimator_router(estimator_service))
+    app.state.research_store = research_store
+    app.state.research_service = research_service
+    app.include_router(build_research_router(research_service))
+    app.include_router(build_reporting_router(research_service))
 
     demo_inputs = EstimatorAwareCallerInputGateway(
         store.connection,
@@ -113,6 +147,7 @@ def create_app(
         store=store,
         inputs=demo_inputs,
         adapter=SimulatedVoiceSessionAdapter(),
+        context_provider=context_provider,
     )
     app.state.demo_orchestrator = demo_orchestrator
     if buyer_model is not None:
@@ -185,6 +220,14 @@ def create_app(
             content={"error": "estimator_validation_error", "detail": str(exc)},
         )
 
+    frontend_dist = Path(__file__).resolve().parents[2] / "web" / "dist"
+    if frontend_dist.is_dir():
+        app.mount(
+            "/",
+            SPAStaticFiles(directory=frontend_dist, html=True),
+            name="negotiator-web",
+        )
+
     return app
 
 
@@ -220,7 +263,18 @@ def _configured_intake_voice_adapter() -> IntakeVoiceAdapter:
     return SimulatedIntakeVoiceAdapter()
 
 
+def _configured_context_researcher() -> ContextResearcher | None:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return None
+    return OpenAIContextResearcher(
+        api_key=api_key,
+        model=os.getenv("OPENAI_RESEARCH_MODEL", "gpt-5.6-luna"),
+    )
+
+
 app = create_app(
     buyer_model=_configured_buyer_model(),
     audio_adapter=_configured_audio_adapter(),
+    context_researcher=_configured_context_researcher(),
 )

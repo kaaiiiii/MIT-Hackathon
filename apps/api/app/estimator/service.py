@@ -145,7 +145,11 @@ class EstimatorService:
                 "provider_context": {
                     "intake_session_id": session_id,
                     "vertical": response.session.vertical,
+                    "schema_version": response.session.schema_version,
+                    "disclosure": AI_DISCLOSURE,
                     "next_field": response.next_field,
+                    "question_objective": response.next_question_objective,
+                    "spoken_question": response.spoken_question,
                 },
             }
         )

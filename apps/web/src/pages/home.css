@@ -1,0 +1,163 @@
+/* Home — the front office: generous space, warm, few elements. Amber is the
+   brand accent here (sanctioned by DESIGN.md for Home only); green and red
+   stay data-only everywhere. */
+
+.home {
+  max-width: var(--measure-home);
+  margin: 0 auto;
+  padding: var(--s8) var(--s5) var(--s6);
+  text-align: center;
+}
+
+.home__hero {
+  font-size: var(--fs-hero);
+  font-weight: 900;
+  line-height: 1.04;
+  text-transform: uppercase;
+}
+
+.home__hero-accent {
+  color: var(--amber);
+}
+
+.home__sub {
+  margin: var(--s4) auto 0;
+  max-width: 52ch;
+  color: var(--paper-1);
+  font-size: var(--fs-lede);
+}
+
+/* ---- the intake-call CTA (mount point) — the visual center of the page ---- */
+
+.call-slot {
+  margin: var(--s7) auto 0;
+  max-width: 48rem;
+  border: 1px solid var(--amber-deep);
+  background: var(--amber-tint);
+  padding: var(--s6) var(--s5);
+}
+
+.call-slot__kicker {
+  display: block;
+  color: var(--amber);
+  margin-bottom: var(--s4);
+}
+
+.call-slot__cta {
+  display: block;
+  width: 100%;
+  padding: var(--s4) var(--s5);
+  background: var(--ink-1);
+  border: 1px solid var(--amber-deep);
+  border-radius: var(--r0);
+  color: var(--paper-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-lede);
+  font-weight: 600;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.call-slot__cta:disabled { cursor: wait; opacity: .6; }
+
+.call-slot__cta-dot {
+  color: var(--paper-2);
+}
+
+.call-slot__note {
+  margin: var(--s3) auto 0;
+  max-width: 44ch;
+  font-size: var(--fs-mono);
+  color: var(--paper-2);
+}
+
+.call-slot__link {
+  display: inline-block;
+  margin-top: var(--s3);
+}
+
+.intake-widget { margin-top: var(--s4); text-align: left; }
+.intake-widget elevenlabs-convai { display: block; width: 100%; }
+.intake-error { margin-top: var(--s3); color: var(--red); }
+.intake-evidence { margin-top: var(--s5); border-top: var(--hairline); text-align: left; }
+.intake-evidence__row { display: grid; grid-template-columns: minmax(9rem, .8fr) 1.2fr; gap: .2rem var(--s3); padding: var(--s3) 0; border-bottom: var(--hairline); }
+.intake-evidence__row span { color: var(--paper-2); font-size: var(--fs-micro); }
+.intake-evidence__row strong { color: var(--paper-0); font-size: var(--fs-mono); }
+.intake-evidence__row small { grid-column: 2; color: var(--paper-2); font-family: var(--font-mono); font-size: .65rem; }
+.intake-research { margin-top: var(--s5); padding: var(--s4); border: 1px solid var(--amber-deep); background: var(--ink-1); text-align: left; }
+.intake-research__label { color: var(--amber); }
+.intake-research ul { margin: var(--s3) 0; padding-left: var(--s4); color: var(--paper-1); }
+.intake-confirm { margin-top: var(--s4); width: 100%; }
+.intake-confirmed { margin-top: var(--s5); padding-top: var(--s4); border-top: var(--hairline); text-align: left; }
+.intake-confirmed__actions { display: flex; align-items: center; gap: var(--s3); margin-top: var(--s3); flex-wrap: wrap; }
+
+/* ---- the docket: three ruled log rows, not columns ---- */
+
+.docket {
+  margin-top: var(--s8);
+  border-top: var(--hairline);
+  text-align: left;
+}
+
+.docket__title {
+  display: block;
+  padding: var(--s3) 0;
+}
+
+.docket__row {
+  display: grid;
+  grid-template-columns: 6ch 1fr;
+  gap: var(--s3);
+  padding: var(--s4) 0;
+  border-top: var(--hairline);
+}
+
+.docket__stamp {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--amber);
+}
+
+.docket__body {
+  color: var(--paper-1);
+  max-width: 58ch;
+}
+
+.docket__body strong {
+  color: var(--paper-0);
+  font-weight: 700;
+}
+
+/* ---- bridge + trust footer ---- */
+
+.home__bridge {
+  margin-top: var(--s7);
+  border: var(--hairline);
+  padding: var(--s5);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s5);
+  flex-wrap: wrap;
+  text-align: left;
+}
+
+.home__bridge-copy {
+  max-width: 46ch;
+}
+
+.home__trust {
+  display: block;
+  margin-top: var(--s7);
+  border-top: var(--hairline);
+  padding: var(--s4) 0 var(--s2);
+}
+
+@media (max-width: 640px) {
+  .home {
+    padding-top: var(--s6);
+  }
+  .intake-evidence__row { grid-template-columns: 1fr; }
+  .intake-evidence__row small { grid-column: 1; }
+}

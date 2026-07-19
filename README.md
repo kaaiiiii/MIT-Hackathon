@@ -8,6 +8,27 @@ The Estimator is the upstream evidence-first intake module. It accumulates voice
 document-region, and user-selected catalog evidence into a versioned draft and writes
 to `job_spec_versions` only after explicit user confirmation.
 
+## Integrated React frontend
+
+The supplied Negotiator React frontend now lives in `apps/web`. Its former disabled
+Home placeholder runs the real ElevenLabs Estimator intake, shows evidence and Luna
+research, confirms the immutable specification, and hands its version to Caller Lab.
+The Report route reads stored call outcomes, quote evidence, transcripts, recordings,
+and both research stages from FastAPI instead of relying only on sample JSON.
+
+For a production-style local run:
+
+```powershell
+cd apps/web
+npm ci
+npm run build
+cd ../..
+uvicorn apps.api.app.main:app --reload
+```
+
+Open `http://127.0.0.1:8000/`. For Vite hot reload, run `npm run dev` in
+`apps/web`; its proxy forwards `/api` and `/demo` to port 8000.
+
 ## Estimator backbone
 
 - `POST /api/v1/intake/sessions` starts or resumes a vertical-configured draft.
@@ -30,10 +51,32 @@ Moving-specific fields, question priority, document types, catalog resolvers, an
 benchmark sources live in `estimator/verticals/moving.yaml`, not Python control flow.
 See [`docs/ESTIMATOR.md`](docs/ESTIMATOR.md) for the contracts and examples.
 
-For a no-JSON local test, start the API and open
+## Grounded research and cross-call context
+
+- `POST /api/v1/research/intake/sessions/{id}/enrich` sends the accumulated vocal
+  transcript and evidenced draft to GPT with web search, then persists a typed,
+  cited context bundle. The browser lab invokes this automatically when intake is
+  complete.
+- Research is stored beside the spec, not inside its confirmed fields. It can suggest
+  terminology, risks, assumptions to verify, and open vendor questions, but cannot
+  silently become a customer fact, quote, benchmark, or competing-bid claim.
+- At each call start, the backend snapshots the Estimator research plus up to eight
+  earlier terminal calls for the same immutable spec. The snapshot contains stored
+  transcript, quote, evidence, and outcome data so GPT can avoid failed questions and
+  ask more accurate follow-ups.
+- Prior-call prices are not leverage by default. Only an evidence-referenced bid in
+  `approved_verified_leverage` authorizes the Caller to disclose a competing number.
+- `POST /api/v1/reports/{version_id}/prepare` is the pre-report gate. It rejects
+  nonterminal calls, performs a fresh deep research pass across the spec and completed
+  call record, stores it, and returns the full report input context.
+- `GET /api/v1/research/specs/{version_id}/report-context` returns the confirmed spec,
+  initial research, completed calls, and latest final research without generating a
+  ranking or inventing missing evidence.
+
+For a browser test, start the API and open
 `http://127.0.0.1:8000/demo/estimator.html`. The Estimator Lab provides editable
-sample fields, builds the evidence-backed draft, and confirms the immutable version
-with two buttons. After confirmation, **Continue to Caller Lab** starts the Caller
+document fields and an ElevenLabs Agents voice-interview option. Both write into the
+same draft and confirmation screen. After confirmation, **Continue to Caller Lab** starts the Caller
 against that exact `version_id`; the lab verifies the stored canonical hash and shows
 the Estimator facts and their provenance on its evidence board. The read-only
 `GET /api/v1/intake/specs/{version_id}` endpoint supplies each value, modality,
@@ -139,14 +182,25 @@ ElevenLabs API key to the browser.
 $env:ELEVENLABS_INTAKE_AGENT_ID = "agent_your_intake_agent_id"
 ```
 
-Without this value, the intake voice endpoint uses the simulated adapter while the
-draft, evidence, planner, and confirmation flow remain fully testable.
+In the ElevenLabs agent dashboard, use
+`apps/api/app/estimator/prompts/intake_agent.txt` as the intake instruction and add a
+blocking client tool named `capture_intake_evidence`. Its parameters are
+`user_text`, `field_name`, `value`, `mark_unknown`, and `unknown_acknowledged`.
+The browser registers the tool and posts each supported answer to the Estimator's
+evidence endpoint, then returns the deterministic planner's next question to the
+agent. See `docs/ESTIMATOR.md` for the exact parameter contract.
+
+Without this value, the intake voice endpoint uses the simulated adapter for automated
+tests; the browser clearly reports that live ElevenLabs Agents is not configured.
 
 The keys stay server-side and are never sent to the browser. Optional model overrides
-default to `gpt-5.4`, `scribe_v2`, and `eleven_flash_v2_5`:
+default to `gpt-5.4` for live call turns, `gpt-5.6-luna` at medium reasoning for
+web-grounded research,
+`scribe_v2`, and `eleven_flash_v2_5`:
 
 ```powershell
 $env:OPENAI_MODEL = "gpt-5.4"
+$env:OPENAI_RESEARCH_MODEL = "gpt-5.6-luna"
 $env:ELEVENLABS_STT_MODEL = "scribe_v2"
 $env:ELEVENLABS_TTS_MODEL = "eleven_flash_v2_5"
 ```

@@ -1,5 +1,7 @@
 import json
 
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from apps.api.app.main import create_app
@@ -11,7 +13,10 @@ from apps.api.app.caller.input_gateway import (
 from apps.api.app.caller.orchestrator import specification_sha256
 from apps.api.app.caller.openai_agent import BuyerTurnDecision
 from apps.api.app.caller.schemas import VendorTarget
-from apps.api.app.estimator.adapters import InMemoryCatalogResolver
+from apps.api.app.estimator.adapters import (
+    ElevenLabsAgentsIntakeAdapter,
+    InMemoryCatalogResolver,
+)
 from apps.api.app.estimator.schemas import CatalogCandidate
 
 
@@ -436,3 +441,119 @@ def test_confirmed_estimator_spec_can_start_caller_lab_session(tmp_path):
         assert presented.status_code == 200, presented.text
         assert "Brooklyn, New York" in presented.json()["agent_message"]
         assert "Queens, New York" in presented.json()["agent_message"]
+
+
+def test_voice_and_document_paths_converge_on_one_spec_shape_and_caller_contract(
+    tmp_path,
+):
+    app = create_app(
+        database_path=str(tmp_path / "modality-convergence.db"),
+        buyer_model=_HandoffBuyerModel(),
+    )
+    with TestClient(app) as client:
+        document_session = _create_session(client)["session_id"]
+        uploaded = client.post(
+            f"/api/v1/intake/sessions/{document_session}/documents",
+            data={"document_type": "moving_inventory_json"},
+            files={
+                "document": (
+                    "inventory.json",
+                    _document(REQUIRED_MOVING_FIELDS),
+                    "application/json",
+                )
+            },
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        document_spec = client.post(
+            f"/api/v1/intake/sessions/{document_session}/confirm",
+            json={"approved": True, "confirmed_by": "document_user"},
+        ).json()
+
+        voice_session = _create_session(client)["session_id"]
+        for index, (field_name, value) in enumerate(REQUIRED_MOVING_FIELDS.items()):
+            captured = client.post(
+                f"/api/v1/intake/sessions/{voice_session}/voice",
+                json={
+                    "turn_id": f"voice_turn_{index}",
+                    "user_text": f"The answer is {value}.",
+                    "field_name": field_name,
+                    "value": value,
+                },
+            )
+            assert captured.status_code == 200, captured.text
+        voice_spec = client.post(
+            f"/api/v1/intake/sessions/{voice_session}/confirm",
+            json={"approved": True, "confirmed_by": "voice_user"},
+        ).json()
+
+        def values(spec):
+            return {
+                field_name: field["value"]
+                for field_name, field in spec["fields"].items()
+            }
+
+        assert document_spec["schema_version"] == voice_spec["schema_version"]
+        assert document_spec["vertical"] == voice_spec["vertical"] == "moving"
+        assert values(document_spec) == values(voice_spec) == REQUIRED_MOVING_FIELDS
+        assert {
+            field["source"]["modality"]
+            for field in document_spec["fields"].values()
+        } == {"document"}
+        assert {
+            field["source"]["modality"] for field in voice_spec["fields"].values()
+        } == {"voice"}
+
+        first_call = client.post(
+            "/api/v1/demo/sessions",
+            json={"job_spec_version_id": voice_spec["version_id"]},
+        ).json()
+        second_call = client.post(
+            "/api/v1/demo/sessions",
+            json={"job_spec_version_id": voice_spec["version_id"]},
+        ).json()
+        assert first_call["confirmed_job_facts"] == second_call["confirmed_job_facts"]
+        assert first_call["call"]["call"]["spec_sha256"] == voice_spec["canonical_hash"]
+        assert second_call["call"]["call"]["spec_sha256"] == voice_spec["canonical_hash"]
+
+
+@pytest.mark.asyncio
+async def test_elevenlabs_agents_adapter_mints_server_side_signed_url():
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["xi-api-key"] == "eleven-secret"
+        assert request.url.params["agent_id"] == "agent_intake"
+        return httpx.Response(
+            200,
+            json={
+                "signed_url": (
+                    "wss://api.elevenlabs.io/v1/convai/conversation?agent_id="
+                    "agent_intake&token=temporary"
+                )
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    adapter = ElevenLabsAgentsIntakeAdapter(
+        api_key="eleven-secret",
+        agent_id="agent_intake",
+        client=client,
+    )
+    provider, signed_url = await adapter.create_connection(
+        session_id="intake_1",
+        context={"next_field": "service"},
+    )
+    assert provider == "elevenlabs_agents"
+    assert signed_url.startswith("wss://api.elevenlabs.io/")
+    await client.aclose()
+
+
+def test_estimator_page_exposes_voice_and_document_intake(tmp_path):
+    app = create_app(database_path=str(tmp_path / "intake-page.db"))
+    with TestClient(app) as client:
+        page = client.get("/demo/estimator.html")
+        script = client.get("/demo/estimator.js")
+    assert page.status_code == 200
+    assert "Start voice interview" in page.text
+    assert "@elevenlabs/convai-widget-embed" in page.text
+    assert "Build evidence-backed draft" in page.text
+    assert "capture_intake_evidence" in script.text
+    assert "provider_connection_url" in script.text

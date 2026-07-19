@@ -1,0 +1,71 @@
+/* tokens.css — the ONLY file where a color, font name, or spacing constant
+   may appear. Values are authoritative in /DESIGN.md; keep the two in sync. */
+
+:root {
+  color-scheme: dark;
+
+  /* ---- color: ink & paper -------------------------------------------- */
+  --ink-0: #0d0e11; /* page */
+  --ink-1: #14161b; /* panel */
+  --ink-2: #1a1d23; /* inset / raised */
+  --ink-3: #22262e; /* hover */
+  --line-0: #262a32; /* hairline rule */
+  --line-1: #3a414d; /* strong rule */
+  --paper-0: #e9e7e2; /* primary text, focus ring */
+  --paper-1: #b9b6ae; /* secondary text */
+  --paper-2: #8d8a82; /* muted text, chart furniture */
+  --paper-3: #63615b; /* faint, disabled */
+
+  /* ---- color: the three semantic inks (data, never decoration) ------- */
+  --amber: #e8a33d;
+  --amber-deep: #b87a1f;
+  --amber-tint: rgba(232, 163, 61, 0.09);
+  --green: #46c288;
+  --green-tint: rgba(70, 194, 136, 0.1);
+  --red: #e0524e;
+  --red-tint: rgba(224, 82, 78, 0.08);
+
+  /* ---- type ----------------------------------------------------------- */
+  --font-display: 'Archivo', sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+  --fs-hero: clamp(2rem, 4vw, 3.5rem);
+  --fs-price: clamp(3.25rem, 7vw, 6rem);
+  --fs-title: clamp(1.625rem, 3vw, 2.25rem);
+  --fs-section: 1.0625rem;
+  --fs-body: 0.9375rem;
+  --fs-lede: 1.0625rem;
+  --fs-metric: 1.25rem;
+  --fs-entry-price: 1.5rem;
+  --fs-counter: 2rem;
+  --fs-mono: 0.8125rem;
+  --fs-micro: 0.6875rem;
+  --fs-digit-inline: 0.92em; /* mono digit runs inside display-font prose */
+  --track-tight: -0.035em;
+  --track-caps: 0.09em;
+  --track-section: 0.02em;
+  --track-price: -0.02em;
+  --leading-body: 1.55;
+
+  /* ---- space, line, shape --------------------------------------------- */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
+  --s7: 48px;
+  --s8: 64px;
+  --s9: 96px;
+  --r0: 0;
+  --r1: 2px; /* bordered mono tags only */
+  --hairline: 1px solid var(--line-0);
+  --rule: 1px solid var(--line-1);
+  --measure-home: 56rem;
+  --measure-report: 76rem;
+
+  /* ---- motion ---------------------------------------------------------- */
+  --t-fast: 120ms ease;
+  --t-flip: 480ms cubic-bezier(0.2, 0.7, 0, 1);
+  --count-ms: 700; /* unitless: read by rAF count-up */
+  --type-ms: 16; /* unitless: typewriter per-character */
+}

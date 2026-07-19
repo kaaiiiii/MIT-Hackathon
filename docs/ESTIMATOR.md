@@ -41,8 +41,25 @@ but cannot choose a field, apply a default, select a catalog candidate, or confi
 
 When `ELEVENLABS_INTAKE_AGENT_ID` and `ELEVENLABS_API_KEY` are configured, starting the
 voice endpoint obtains an authenticated ElevenLabs Agents signed WebSocket URL. The
-prompt template is `estimator/prompts/intake_agent.txt`; configure its backend tool to
-submit exact transcript turns and extracted fields to the same `/voice` endpoint.
+Estimator Lab mounts the official ElevenLabs Agents widget with that short-lived URL;
+the API key remains server-side. The prompt template is
+`estimator/prompts/intake_agent.txt`.
+
+Configure one blocking ElevenLabs **client tool** named
+`capture_intake_evidence` with these parameters:
+
+```text
+user_text: string (required)
+field_name: string (required)
+value: string (required unless mark_unknown is true)
+mark_unknown: boolean
+unknown_acknowledged: boolean
+```
+
+The browser registers that tool before the conversation starts. Each tool call posts
+the transcript-backed value to the same `/voice` application service used in tests,
+then returns the planner's next field and spoken question to the agent. Configure the
+tool to wait for its response so the agent cannot race ahead of durable evidence.
 
 ## Document parser seam
 
@@ -60,8 +77,9 @@ The built-in deterministic parser accepts `moving_inventory_json` and
 }
 ```
 
-Inject a vision/OCR implementation of `DocumentParser` for production photos, PDFs,
-or bills. It writes through the same evidence application path and cannot bypass
+The Estimator Lab exposes `moving_inventory_json` as its document route. Inject a
+vision/OCR implementation of `DocumentParser` for production photos, PDFs, or bills.
+Every parser writes through the same draft evidence store as voice and cannot bypass
 confirmation.
 
 ## Catalog and benchmark boundary
@@ -92,3 +110,33 @@ Estimator evidence before a call starts. This preview preserves the complete
 `EvidencedField` rather than the flattened speaking value, so the interface can show
 source modality, confidence, and the voice-turn, document-region, or catalog-selection
 reference without coupling those provenance details to Caller strategy.
+
+Voice and document provenance necessarily differ, but both modalities produce the
+same vertical schema and field/value contract. The Caller receives the exact stored
+`facts_json` for one confirmed `version_id`; every call bound to that version verifies
+the same canonical hash before starting.
+
+## GPT research context
+
+After the voice interview (or document path) closes the required-field set, the lab
+calls `POST /api/v1/research/intake/sessions/{session_id}/enrich`. The research adapter
+receives the exact transcript, selected evidence, unresolved fields, vertical, and
+schema version. It uses the OpenAI Responses API with web search and returns a typed
+bundle containing a topic summary, terminology, risks, assumptions to verify, open
+vendor questions, source-linked claims, sources, and limitations.
+
+This bundle is deliberately outside `job_spec_versions.facts_json`. The confirmed spec
+therefore remains the customer-fact contract and keeps its canonical hash. Research is
+an advisory input only. The API stores the model and provider response ID alongside the
+bundle so the context used for a call can be audited.
+
+When a call starts, `CallerResearchContextProvider` persists a snapshot containing the
+latest Estimator bundle and earlier terminal calls for that same version. Each prior
+call includes its transcript, structured terms, itemized lines, outcome, warnings, and
+recording reference. The Caller prompt may use these records to improve its questions,
+but may disclose a competing price only through the separate verified-leverage input.
+
+After the selected call set is terminal, `POST /api/v1/reports/{version_id}/prepare`
+runs a fresh final research pass. The returned report context keeps external research
+separate from stored quote evidence; the reporting prompt is explicitly prohibited
+from using research to fill a missing fee, total, deadline, or vendor statement.

@@ -1,0 +1,412 @@
+/* base.css — shared vocabulary of the blotter. No raw colors here: tokens only. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-variant-numeric: tabular-nums;
+}
+
+body {
+  margin: 0;
+  background: var(--ink-0);
+  color: var(--paper-0);
+  font-family: var(--font-display);
+  font-size: var(--fs-body);
+  font-weight: 400;
+  line-height: var(--leading-body);
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  letter-spacing: var(--track-tight);
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--paper-0);
+  text-decoration: underline;
+  text-decoration-color: var(--line-1);
+  text-underline-offset: 3px;
+}
+
+a:hover {
+  text-decoration-color: var(--paper-1);
+}
+
+:focus-visible {
+  outline: 2px solid var(--paper-0);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--paper-0);
+  color: var(--ink-0);
+}
+
+/* ---- mono utilities ---------------------------------------------------- */
+
+.mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+}
+
+.micro {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+}
+
+.muted {
+  color: var(--paper-2);
+}
+
+.faint {
+  color: var(--paper-3);
+}
+
+/* ---- section header: NN — TITLE ---------------------------------------- */
+
+.section-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  margin: var(--s8) 0 var(--s5);
+}
+
+.section-head .no {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--paper-2);
+}
+
+.section-head .no::after {
+  content: ' —';
+}
+
+.section-head h2 {
+  font-size: var(--fs-section);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: var(--track-section);
+  white-space: nowrap;
+}
+
+.section-head::after {
+  content: '';
+  flex: 1;
+  border-top: var(--hairline);
+  transform: translateY(-4px);
+}
+
+/* ---- bordered mono tag --------------------------------------------------- */
+
+.tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid var(--line-1);
+  border-radius: var(--r1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  color: var(--paper-1);
+  white-space: nowrap;
+}
+
+.tag--quiet {
+  color: var(--paper-2);
+  border-color: var(--line-0);
+}
+
+.tag--struck {
+  color: var(--paper-3);
+  border-color: var(--line-0);
+  text-decoration: line-through;
+}
+
+.tag--pick {
+  color: var(--amber);
+  border-color: var(--amber-deep);
+}
+
+/* ---- deltas: direction is a glyph, money-down is green ------------------ */
+
+.delta {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.delta--down {
+  color: var(--green);
+}
+
+.delta--flat {
+  color: var(--paper-2);
+}
+
+/* ---- buttons: neutral, bordered, mono caps ------------------------------- */
+
+.btn {
+  display: inline-block;
+  padding: var(--s3) var(--s5);
+  background: none;
+  border: var(--rule);
+  border-radius: var(--r0);
+  color: var(--paper-0);
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  font-weight: 600;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+
+.btn:hover {
+  background: var(--ink-3);
+  border-color: var(--paper-2);
+}
+
+.btn:disabled {
+  color: var(--paper-3);
+  border-color: var(--line-0);
+  cursor: not-allowed;
+  background: none;
+}
+
+.btn--small {
+  padding: var(--s1) var(--s3);
+  font-size: var(--fs-micro);
+}
+
+/* ---- collapsible: native details with mono +/− marker -------------------- */
+
+details.fold > summary {
+  list-style: none;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--paper-1);
+  padding: var(--s3) 0;
+  border-top: var(--hairline);
+}
+
+details.fold > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.fold > summary::before {
+  content: '+';
+  display: inline-block;
+  width: 1.5em;
+  color: var(--paper-2);
+}
+
+details.fold[open] > summary::before {
+  content: '\2212'; /* minus sign */
+}
+
+details.fold > summary:hover {
+  color: var(--paper-0);
+}
+
+details.fold > .fold-body {
+  padding: var(--s3) 0 var(--s5) 1.5em;
+}
+
+/* ---- ledger tables -------------------------------------------------------- */
+
+table.ledger {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+}
+
+table.ledger th {
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  color: var(--paper-2);
+  text-align: left;
+  padding: var(--s2) var(--s3);
+  border-bottom: var(--rule);
+}
+
+table.ledger td {
+  padding: var(--s2) var(--s3);
+  border-bottom: var(--hairline);
+  color: var(--paper-1);
+  vertical-align: top;
+}
+
+table.ledger td.num,
+table.ledger th.num {
+  text-align: right;
+}
+
+table.ledger .strike {
+  text-decoration: line-through;
+  color: var(--paper-3);
+}
+
+/* ---- checklist: plain squares -------------------------------------------- */
+
+.checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+}
+
+.checklist li {
+  display: flex;
+  gap: var(--s3);
+  padding: var(--s2) 0 var(--s2) var(--s3);
+  color: var(--paper-1);
+}
+
+.checklist li .box {
+  color: var(--paper-2);
+  flex: none;
+}
+
+.checklist li.next {
+  border-left: 2px solid var(--amber-deep);
+  color: var(--paper-0);
+}
+
+.checklist li.done {
+  color: var(--paper-3);
+}
+
+/* ---- screen-reader-only utility --------------------------------------------- */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---- motion discipline ----------------------------------------------------- */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
+/* ---- app shell --------------------------------------------------------------- */
+
+.shell-nav {
+  border-bottom: var(--hairline);
+}
+
+.shell-nav__inner {
+  max-width: var(--measure-report);
+  margin: 0 auto;
+  padding: var(--s4) var(--s5);
+  display: flex;
+  align-items: baseline;
+  gap: var(--s5);
+}
+
+.shell-nav__brand {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  font-weight: 600;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  text-decoration: none;
+}
+
+.shell-nav__dots {
+  flex: 1;
+  border-bottom: 1px dotted var(--line-1);
+  transform: translateY(-4px);
+}
+
+.shell-nav__links {
+  display: flex;
+  gap: var(--s4);
+}
+
+.shell-nav__links a {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  text-decoration: none;
+  color: var(--paper-2);
+  padding: 2px 0;
+}
+
+.shell-nav__links a:hover {
+  color: var(--paper-0);
+}
+
+.shell-nav__links a.active {
+  color: var(--paper-0);
+  border-bottom: 2px solid var(--paper-0);
+}
+
+.shell-nav__auth {
+  background: none;
+  border: none;
+  padding: 2px 0;
+  margin-left: var(--s2);
+  color: var(--paper-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.shell-nav__auth:hover {
+  color: var(--paper-0);
+}
+
+.shell-nav__auth--signup {
+  border: 1px solid var(--line-1);
+  border-radius: var(--r1);
+  padding: 2px 10px;
+}
+
+.shell-nav__auth--signup:hover {
+  border-color: var(--paper-2);
+}
+
+.shell-nav__note {
+  max-width: var(--measure-report);
+  margin: 0 auto;
+  padding: 0 var(--s5) var(--s2);
+  text-align: right;
+}

@@ -67,10 +67,14 @@ class ElevenLabsAgentsIntakeAdapter:
         agent_id: str,
         client: httpx.AsyncClient | None = None,
     ) -> None:
+        if not api_key.strip():
+            raise ValueError("ElevenLabs API key is required")
+        if not agent_id.strip():
+            raise ValueError("ElevenLabs intake Agent ID is required")
+        self.api_key = api_key
         self.agent_id = agent_id
         self._owns_client = client is None
         self.client = client or httpx.AsyncClient(
-            headers={"xi-api-key": api_key},
             timeout=httpx.Timeout(20.0, connect=10.0),
         )
 
@@ -81,6 +85,7 @@ class ElevenLabsAgentsIntakeAdapter:
             response = await self.client.get(
                 "https://api.elevenlabs.io/v1/convai/conversation/get-signed-url",
                 params={"agent_id": self.agent_id},
+                headers={"xi-api-key": self.api_key},
             )
             response.raise_for_status()
             signed_url = response.json().get("signed_url")

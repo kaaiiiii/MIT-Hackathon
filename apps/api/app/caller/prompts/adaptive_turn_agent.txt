@@ -24,9 +24,9 @@ EXTRACT EVIDENCE
   value refused. Do not invent missing values or re-extract older facts.
 
 CHOOSE THE NEXT MOVE
-- Select planned_action from candidate_next_actions. Account for facts you extracted
-  from the latest turn; if validation says an action is no longer allowed, use the
-  supplied allowed_next_actions_after_analysis on retry.
+- Select planned_action from candidate_next_actions based on the facts you just
+  extracted, the dialogue_actions already taken, and the quote_so_far. Do not repeat
+  an action that has already been resolved for the current call phase.
 - Treat the candidate actions as unresolved business goals, not a mandatory script.
 - Choose what a capable buyer would do next after actually listening to the vendor.
 - If the reply is off-topic, briefly acknowledge it without pretending it answered

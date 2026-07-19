@@ -321,7 +321,7 @@ def test_gpt_decision_extracts_terse_flat_answer_then_asks_for_components(tmp_pa
         _send(client, call_id, "Yes, I can discuss it.")
         body = _send(client, call_id, "flat")
 
-    assert responses.payloads[-1]["candidate_next_actions"] == [
+    assert responses.payloads[-1]["candidate_next_actions"][:4] == [
         "request_pricing_model",
         "request_itemization",
         "request_total",

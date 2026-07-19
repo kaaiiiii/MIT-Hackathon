@@ -247,6 +247,7 @@ class CallContext(BaseModel):
     policy: CallPolicy
     agent_configuration: AgentConfiguration
     tool_names: tuple[str, ...]
+    augmented_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class CallView(BaseModel):
@@ -256,3 +257,4 @@ class CallView(BaseModel):
     dialogue_actions: list[str] = Field(default_factory=list)
     outcome: StructuredCallOutcome | None = None
     recording_reference: str | None = None
+    augmented_context: dict[str, Any] = Field(default_factory=dict)

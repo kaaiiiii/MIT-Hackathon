@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from .errors import ImmutableSpecificationError, NotFoundError, ValidationError
 from .outcome_validator import CallOutcomeValidator
-from .ports import CallerInputGateway, CallerStore, VoiceSessionAdapter
+from .ports import CallContextProvider, CallerInputGateway, CallerStore, VoiceSessionAdapter
 from .quote_draft import QuoteDraftManager
 from .schemas import (
     AgentEvent,
@@ -62,10 +62,12 @@ class CallOrchestrator:
         store: CallerStore,
         inputs: CallerInputGateway,
         adapter: VoiceSessionAdapter,
+        context_provider: CallContextProvider | None = None,
     ) -> None:
         self.store = store
         self.inputs = inputs
         self.adapter = adapter
+        self.context_provider = context_provider
         self.states = CallStateMachine()
         self.quotes = QuoteDraftManager(store)
         self.outcomes = CallOutcomeValidator()
@@ -121,6 +123,11 @@ class CallOrchestrator:
             update={"status": CallStatus.CONNECTING, "started_at": datetime.now(UTC)}
         )
         self.store.update_call(connecting)
+        augmented_context = (
+            self.context_provider.build_and_snapshot(call.call_id, spec.version_id)
+            if self.context_provider is not None
+            else {}
+        )
         context = CallContext(
             call_id=call.call_id,
             immutable_spec_sha256=call.spec_sha256,
@@ -129,6 +136,7 @@ class CallOrchestrator:
             policy=call.policy,
             agent_configuration=call.agent_configuration,
             tool_names=CALLER_TOOL_NAMES,
+            augmented_context=augmented_context,
         )
         try:
             session_id = await self.adapter.create_session(context)
@@ -289,6 +297,11 @@ class CallOrchestrator:
 
     def get_call_view(self, call_id: str) -> CallView:
         call = self._get_call(call_id)
+        augmented_context = (
+            self.context_provider.get_snapshot(call_id)
+            if self.context_provider is not None
+            else None
+        )
         return CallView(
             call=call,
             transcript=self.store.list_transcript(call_id),
@@ -296,6 +309,7 @@ class CallOrchestrator:
             dialogue_actions=self.store.list_dialogue_actions(call_id),
             outcome=self.store.get_outcome(call_id),
             recording_reference=call.recording_id,
+            augmented_context=augmented_context or {},
         )
 
     def record_dialogue_action(self, call_id: str, action: str) -> None:

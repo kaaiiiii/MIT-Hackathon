@@ -7,7 +7,7 @@ from typing import Literal, Protocol
 from openai import AsyncOpenAI, OpenAIError
 from pydantic import BaseModel, Field
 
-from .dialogue_planner import DialogueAction, DialoguePlanner
+from .dialogue_planner import DialogueAction
 from .errors import ExternalServiceError
 from .schemas import CallView
 from .spoken_response import (
@@ -117,7 +117,6 @@ class OpenAIBuyerTurnModel:
         self.model_name = model
         self.job_facts = job_facts or {}
         self.client = client or AsyncOpenAI(api_key=api_key)
-        self.planner = DialoguePlanner()
         prompt_directory = Path(__file__).with_name("prompts")
         self.communication_policy = (
             prompt_directory / "negotiation_policy.txt"
@@ -141,10 +140,7 @@ class OpenAIBuyerTurnModel:
         job_facts: dict | None = None,
     ) -> BuyerTurnDecision:
         active_job_facts = job_facts if job_facts is not None else self.job_facts
-        baseline = self.planner.plan(view, vendor_text, active_job_facts)
-        candidate_actions = self._candidate_actions(
-            view, baseline.allowed_next_actions
-        )
+        candidate_actions = self._candidate_actions(view)
         payload = {
             "current_call_state": view.call.status.value,
             "confirmed_job_spec": self._job_spec(view, active_job_facts),
@@ -157,17 +153,12 @@ class OpenAIBuyerTurnModel:
             "candidate_next_actions": [
                 action.value for action in candidate_actions
             ],
-            "workflow_context": baseline.model_dump(mode="json"),
+            "non_authoritative_research_and_prior_calls": view.augmented_context,
         }
         try:
             decision = await self._request_decision(payload)
             for attempt in range(2):
-                failure, allowed = self._validate_decision(
-                    decision,
-                    view,
-                    vendor_text,
-                    active_job_facts,
-                )
+                failure = self._validate_decision(decision, view)
                 if failure is None:
                     return decision
                 if attempt == 1:
@@ -178,13 +169,10 @@ class OpenAIBuyerTurnModel:
                     {
                         **payload,
                         "decision_validation_failure": failure,
-                        "allowed_next_actions_after_analysis": [
-                            action.value for action in allowed
-                        ],
                         "retry_instruction": (
-                            "Reconsider the latest turn and return a complete corrected "
-                            "BuyerTurnDecision. Preserve only facts supported by the "
-                            "conversation and choose one allowed next action."
+                            "Rewrite the spoken response so it responds naturally to "
+                            "the latest vendor turn. Keep planned_action, extracted "
+                            "facts, and intent unless they conflict with the failure."
                         ),
                     }
                 )
@@ -197,25 +185,24 @@ class OpenAIBuyerTurnModel:
         raise ExternalServiceError("OpenAI returned no valid buyer turn")
 
     @staticmethod
-    def _candidate_actions(
-        view: CallView,
-        baseline: list[DialogueAction],
-    ) -> list[DialogueAction]:
-        """Expose phase goals broadly; post-extraction validation enforces readiness."""
-        blocker_actions = {
+    def _candidate_actions(view: CallView) -> list[DialogueAction]:
+        """Phase-appropriate action menu; the LLM picks freely from it."""
+        status = view.call.status.value
+        blockers = [
             DialogueAction.REQUEST_PROVISIONAL_RANGE,
             DialogueAction.REQUEST_CALLBACK_REQUIREMENTS,
             DialogueAction.CLOSE_CALLBACK_REQUIRED,
-        }
-        if any(action in blocker_actions for action in baseline):
-            return baseline
-        status = view.call.status.value
+        ]
+        if status == "disclosure":
+            return [DialogueAction.PRESENT_JOB, *blockers, DialogueAction.CONTINUE]
         if status == "quote_collection":
             return [
                 DialogueAction.REQUEST_PRICING_MODEL,
                 DialogueAction.REQUEST_ITEMIZATION,
                 DialogueAction.REQUEST_TOTAL,
                 DialogueAction.CLARIFY_FEES,
+                *blockers,
+                DialogueAction.CONTINUE,
             ]
         if status == "quote_clarification":
             actions = [
@@ -226,8 +213,14 @@ class OpenAIBuyerTurnModel:
             ]
             if view.call.policy.approved_leverage_bid_id:
                 actions.insert(-1, DialogueAction.USE_VERIFIED_LEVERAGE)
-            return actions
-        return baseline
+            return [*actions, *blockers, DialogueAction.CONTINUE]
+        if status == "summary_confirmation":
+            return [
+                DialogueAction.CONFIRM_SUMMARY,
+                *blockers,
+                DialogueAction.CONTINUE,
+            ]
+        return [DialogueAction.CONTINUE]
 
     async def opening(
         self,
@@ -249,6 +242,7 @@ class OpenAIBuyerTurnModel:
                 "behalf of a buyer to request a quote, then ask whether now is a "
                 "good time to discuss the confirmed job."
             ),
+            "non_authoritative_research_and_prior_calls": view.augmented_context,
         }
         try:
             spoken_turn = await self._request_spoken(payload)
@@ -279,33 +273,8 @@ class OpenAIBuyerTurnModel:
         self,
         decision: BuyerTurnDecision,
         view: CallView,
-        vendor_text: str,
-        job_facts: dict,
-    ) -> tuple[str | None, list[DialogueAction]]:
-        current_terms: dict[str, list[object]] = {}
-        for term in decision.terms:
-            value = (
-                term.value_number
-                if term.value_number is not None
-                else term.value_text
-            )
-            if value is not None:
-                current_terms.setdefault(term.category, []).append(value)
-        plan = self.planner.plan(
-            view,
-            vendor_text,
-            job_facts,
-            current_turn_line_item_count=len(decision.line_items),
-            current_turn_terms=current_terms,
-        )
-        allowed = plan.allowed_next_actions
-        if decision.planned_action not in allowed:
-            return (
-                f"Action {decision.planned_action.value!r} is not currently allowed; "
-                f"choose one of {[action.value for action in allowed]}",
-                allowed,
-            )
-
+    ) -> str | None:
+        """Guardrails on the spoken text only. Action choice is the LLM's call."""
         check = validate_spoken_response(
             decision.spoken_response,
             previous_buyer_turn(view.transcript),
@@ -314,8 +283,8 @@ class OpenAIBuyerTurnModel:
             in {"off_topic", "unclear"},
         )
         if not check.valid:
-            return check.reason or "Spoken response failed validation", allowed
-        return None, allowed
+            return check.reason or "Spoken response failed validation"
+        return None
 
     async def _request_spoken(self, payload: dict) -> SpokenTurn:
         response = await self.client.responses.parse(

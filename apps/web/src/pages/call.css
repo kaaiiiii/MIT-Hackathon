@@ -1,0 +1,232 @@
+/* Seller detail — the deal file for one call. */
+
+.call {
+  max-width: var(--measure-report);
+  margin: 0 auto;
+  padding: var(--s5) var(--s5) var(--s8);
+}
+
+.call__topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s4);
+  flex-wrap: wrap;
+  border-bottom: var(--hairline);
+  padding-bottom: var(--s3);
+}
+
+.call__switcher {
+  display: flex;
+  gap: var(--s2);
+  flex-wrap: wrap;
+}
+
+.call__switch {
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  text-decoration: none;
+  color: var(--paper-2);
+  border: 1px solid var(--line-0);
+  border-radius: var(--r1);
+  padding: 2px 8px;
+}
+
+.call__switch:hover {
+  color: var(--paper-0);
+  border-color: var(--line-1);
+}
+
+.call__switch.is-on {
+  color: var(--paper-0);
+  border-color: var(--paper-2);
+}
+
+.call__context {
+  display: block;
+  margin: var(--s3) 0 var(--s5);
+}
+
+.call__name {
+  font-size: var(--fs-title);
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.call__meta {
+  margin-top: var(--s2);
+}
+
+.call-banner {
+  margin: var(--s4) 0;
+  border: var(--hairline);
+  background: var(--ink-1);
+  padding: var(--s3) var(--s4);
+  color: var(--paper-0);
+}
+
+.call-banner--pick {
+  border-left: 3px solid var(--amber);
+}
+
+.call-banner__label {
+  display: inline-block;
+  margin-right: var(--s3);
+}
+
+.call__metrics {
+  display: flex;
+  gap: var(--s6);
+  margin: var(--s4) 0;
+  padding: var(--s3) 0;
+  border-top: var(--hairline);
+  border-bottom: var(--hairline);
+  flex-wrap: wrap;
+}
+
+.call__metrics dt {
+  margin-bottom: var(--s1);
+}
+
+.call__metrics dd {
+  margin: 0;
+  font-size: var(--fs-metric);
+  font-weight: 600;
+}
+
+.call__chart-title {
+  margin-top: var(--s5);
+}
+
+/* ---- columns ---- */
+
+.call__cols {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: var(--s6);
+  margin-top: var(--s5);
+}
+
+/* ---- the conversation ---- */
+
+.convo__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s4);
+  border-bottom: var(--hairline);
+  padding-bottom: var(--s2);
+  margin-bottom: var(--s3);
+}
+
+.convo__modes {
+  display: flex;
+  gap: var(--s1);
+}
+
+.convo__mode {
+  background: none;
+  border: 1px solid var(--line-0);
+  border-radius: var(--r1);
+  color: var(--paper-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-micro);
+  font-weight: 500;
+  letter-spacing: var(--track-caps);
+  text-transform: uppercase;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: color var(--t-fast), border-color var(--t-fast);
+}
+
+.convo__mode:hover {
+  color: var(--paper-0);
+}
+
+.convo__mode.is-on {
+  color: var(--paper-0);
+  border-color: var(--paper-2);
+}
+
+.convo__audio {
+  width: 100%;
+  margin: var(--s3) 0;
+}
+
+.convo__omitted {
+  text-align: center;
+  padding: var(--s2) 0;
+}
+
+.turn {
+  display: grid;
+  grid-template-columns: 6ch 1fr;
+  gap: var(--s3);
+  padding: var(--s3);
+  margin-bottom: var(--s2);
+  border: var(--hairline);
+  background: var(--ink-1);
+}
+
+.turn--agent {
+  background: var(--ink-2);
+  border-left: 2px solid var(--line-1);
+}
+
+.turn--system {
+  background: none;
+}
+
+.turn__stamp {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--paper-3);
+}
+
+.turn__who {
+  display: block;
+  margin-bottom: var(--s1);
+}
+
+.turn__note {
+  margin: var(--s1) 0;
+}
+
+.turn__cited {
+  margin: var(--s1) 0;
+}
+
+.turn__text {
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono);
+  color: var(--paper-0);
+  line-height: 1.65;
+  margin-bottom: var(--s1);
+}
+
+/* ---- receipts side ---- */
+
+.receipts__sub {
+  margin: var(--s4) 0 var(--s2);
+}
+
+.receipts__killed {
+  padding: var(--s2) 0;
+}
+
+.call__flag {
+  margin-top: var(--s3);
+  color: var(--paper-1);
+  border: 1px solid var(--red);
+  border-left: 3px solid var(--red);
+  background: var(--red-tint);
+  padding: var(--s3);
+}
+
+@media (max-width: 900px) {
+  .call__cols {
+    grid-template-columns: 1fr;
+  }
+}
