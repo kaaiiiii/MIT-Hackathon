@@ -16,7 +16,7 @@ class OpenAITranscriptFieldExtractor:
         self,
         *,
         api_key: str,
-        model: str = "gpt-5.6-luna",
+        model: str = "gpt-5.2",
         client: AsyncOpenAI | None = None,
     ) -> None:
         self.model_name = model

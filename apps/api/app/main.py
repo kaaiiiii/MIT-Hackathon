@@ -272,7 +272,7 @@ def _configured_buyer_model() -> BuyerTurnModel | None:
         return None
     return OpenAIBuyerTurnModel(
         api_key=api_key,
-        model=os.getenv("OPENAI_MODEL", "gpt-5.4"),
+        model=os.getenv("OPENAI_MODEL", "gpt-5.2"),
         job_facts=DEMO_SPEC.facts,
     )
 
@@ -304,7 +304,7 @@ def _configured_sample_generator() -> SampleQuoteGenerator | None:
         return None
     return OpenAISampleQuoteGenerator(
         api_key=api_key,
-        model=os.getenv("OPENAI_MODEL", "gpt-5.4"),
+        model=os.getenv("OPENAI_MODEL", "gpt-5.2"),
     )
 
 
@@ -314,7 +314,7 @@ def _configured_context_researcher() -> ContextResearcher | None:
         return None
     return OpenAIContextResearcher(
         api_key=api_key,
-        model=os.getenv("OPENAI_RESEARCH_MODEL", "gpt-5.6-luna"),
+        model=os.getenv("OPENAI_RESEARCH_MODEL", "gpt-5.2"),
     )
 
 
@@ -326,7 +326,7 @@ def _configured_transcript_extractor() -> TranscriptFieldExtractor | None:
         api_key=api_key,
         model=os.getenv(
             "OPENAI_ESTIMATOR_MODEL",
-            os.getenv("OPENAI_RESEARCH_MODEL", "gpt-5.6-luna"),
+            os.getenv("OPENAI_RESEARCH_MODEL", "gpt-5.2"),
         ),
     )
 

@@ -78,7 +78,7 @@ class _FakeOpenAIClient:
         self.responses = _FakeResponses()
 
 
-async def test_openai_research_defaults_to_luna_medium():
+async def test_openai_research_defaults_to_gpt_5_2():
     client = _FakeOpenAIClient()
     researcher = OpenAIContextResearcher(api_key="test", client=client)
 
@@ -86,8 +86,8 @@ async def test_openai_research_defaults_to_luna_medium():
         stage="final_report_research", payload={"confirmed_job_spec": {}}
     )
 
-    assert researcher.model_name == "gpt-5.6-luna"
-    assert client.responses.kwargs["model"] == "gpt-5.6-luna"
+    assert researcher.model_name == "gpt-5.2"
+    assert client.responses.kwargs["model"] == "gpt-5.2"
     assert client.responses.kwargs["reasoning"] == {"effort": "medium"}
     assert result.response_id == "response-luna"
 

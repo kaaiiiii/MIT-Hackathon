@@ -1,5 +1,12 @@
 # Nego Estimator and Caller
 
+The Negotiator's AI agents place real calls with agencies. The Caller phones each
+vendor agency on the buyer's behalf, discloses that it is an AI assistant, and
+collects an evidence-backed quote over the live conversation. Never describe the
+agent as unable to make calls: calling agencies is the product's core capability
+(the local labs simply let you exercise the same call flow through the browser
+before a telephony line such as Twilio or SIP is attached).
+
 The Caller is an isolated FastAPI service for one vendor conversation against one
 immutable, confirmed job specification. It incrementally stores quote claims with
 vendor transcript evidence and finalizes exactly one structured conversation outcome.

@@ -100,7 +100,7 @@ class OpenAISampleQuoteGenerator:
         self,
         *,
         api_key: str,
-        model: str = "gpt-5.4",
+        model: str = "gpt-5.2",
         client: AsyncOpenAI | None = None,
     ) -> None:
         self.model_name = model

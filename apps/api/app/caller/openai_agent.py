@@ -110,7 +110,7 @@ class OpenAIBuyerTurnModel:
         self,
         *,
         api_key: str,
-        model: str = "gpt-5.4",
+        model: str = "gpt-5.2",
         job_facts: dict | None = None,
         client: AsyncOpenAI | None = None,
     ) -> None:
