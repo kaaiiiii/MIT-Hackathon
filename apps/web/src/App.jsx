@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Navigate, NavLink, Route, Routes, useLocation, useSearchParams } from 'react-router-dom';
 import { ReportProvider } from './lib/ReportContext';
 import Home from './pages/Home';
+import Calls from './pages/Calls';
 import Report from './pages/Report';
 import CallDetail from './pages/CallDetail';
 
@@ -36,6 +37,9 @@ function Nav() {
           <NavLink to="/" end className={({ isActive }) => (isActive ? 'active' : '')}>
             Home
           </NavLink>
+          <NavLink to="/calls" className={({ isActive }) => (isActive ? 'active' : '')}>
+            Calls
+          </NavLink>
           <NavLink to="/report" className={onReport ? 'active' : ''}>
             Report
           </NavLink>
@@ -62,6 +66,7 @@ export default function App() {
       <Nav />
       <Routes>
         <Route path="/" element={<Home />} />
+        <Route path="/calls" element={<Calls />} />
         <Route path="/report" element={<ReportOrRedirect />} />
         <Route path="/call/:id" element={<CallDetail />} />
         <Route path="*" element={<Navigate to="/" replace />} />

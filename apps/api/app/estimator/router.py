@@ -33,6 +33,10 @@ def build_estimator_router(service: EstimatorService) -> APIRouter:
     def get_session(session_id: str) -> IntakeSessionView:
         return service.get_session(session_id)
 
+    @router.get("/specs")
+    def list_confirmed_specs(limit: int = 20) -> list[dict]:
+        return service.list_confirmed_specs(limit)
+
     @router.get("/specs/{version_id}", response_model=ConfirmedJobSpecView)
     def get_confirmed_spec(version_id: str) -> ConfirmedJobSpecView:
         return service.get_confirmed_spec(version_id)

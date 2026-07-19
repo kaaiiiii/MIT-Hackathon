@@ -115,6 +115,17 @@ class EstimatorService:
             updated_at=row["updated_at"],
         )
 
+    def list_confirmed_specs(self, limit: int = 20) -> list[dict]:
+        return [
+            {
+                "version_id": row["version_id"],
+                "vertical": row["vertical"],
+                "confirmed_at": row["confirmed_at"],
+                "superseded_by": row["superseded_by"],
+            }
+            for row in self.store.list_confirmed_rows(limit)
+        ]
+
     def get_confirmed_spec(self, version_id: str) -> ConfirmedJobSpecView:
         row = self.store.get_confirmed_row(version_id)
         facts = json.loads(row["facts_json"])

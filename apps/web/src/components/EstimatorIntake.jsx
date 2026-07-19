@@ -353,9 +353,9 @@ export default function EstimatorIntake() {
         <div className="intake-confirmed">
           <p><strong>Specification confirmed.</strong> <span className="mono">{confirmed.version_id}</span></p>
           <div className="intake-confirmed__actions">
-            <a className="btn" href={`/demo/?job_spec_version_id=${encodeURIComponent(confirmed.version_id)}`}>
-              Open Caller Lab →
-            </a>
+            <Link className="btn" to={`/calls?spec=${encodeURIComponent(confirmed.version_id)}`}>
+              Step 2: Simulate the calls →
+            </Link>
             <a className="btn btn--small" href="/demo/samples.html" target="_blank" rel="noopener">
               Play the agency part (optional) →
             </a>

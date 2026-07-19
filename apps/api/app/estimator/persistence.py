@@ -507,6 +507,13 @@ class SQLiteEstimatorStore:
         except sqlite3.IntegrityError as exc:
             raise EstimatorConflictError("Confirmed version already exists") from exc
 
+    def list_confirmed_rows(self, limit: int = 20) -> list[sqlite3.Row]:
+        return self.connection.execute(
+            "SELECT version_id, vertical, confirmed_at, superseded_by "
+            "FROM estimator_confirmed_specs ORDER BY confirmed_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+
     def get_confirmed_row(self, version_id: str) -> sqlite3.Row:
         row = self.connection.execute(
             "SELECT * FROM estimator_confirmed_specs WHERE version_id = ?",
